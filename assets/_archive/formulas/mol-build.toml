@@ -1,0 +1,24 @@
+formula = "mol-build"
+description = "Implement a planned story. The implementor reads metadata.plan_file, executes Red/Green/Refactor steps in order, commits per step, pushes the feature branch, hands off to the tester."
+version = 1
+
+[vars.story_id]
+description = "ID of the story bead to implement (must have metadata.plan_file already)"
+required = true
+
+[[steps]]
+id = "implement-plan"
+title = "Implement story {{story_id}}"
+description = """
+You are implementing story bead {{story_id}}.
+
+1. Read the story and the plan it points to:
+   ```bash
+   bd show {{story_id}} --json
+   PLAN=$(bd show {{story_id}} --json | jq -r '.[0].metadata.plan_file')
+   ```
+
+2. Execute the plan's Steps section in order. One Red/Green/Refactor cycle per step. One commit per cycle.
+
+3. When all steps land green, push the feature branch and hand off to the tester. See your prompt template for the full discipline.
+"""

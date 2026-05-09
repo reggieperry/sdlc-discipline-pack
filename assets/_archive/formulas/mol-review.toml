@@ -1,0 +1,25 @@
+formula = "mol-review"
+description = "Review the implementation against the plan. Spec coverage + code quality + sensitive files. Pass routes to documenter; fail returns to implementor."
+version = 1
+
+[vars.story_id]
+description = "ID of the story bead to review (must have metadata.plan_file and metadata.branch)"
+required = true
+
+[[steps]]
+id = "review-implementation"
+title = "Review story {{story_id}}"
+description = """
+You are reviewing story bead {{story_id}}.
+
+1. Read the plan and check out the branch:
+   ```bash
+   bd show {{story_id}} --json
+   git fetch origin
+   git checkout "$(bd show {{story_id}} --json | jq -r '.[0].metadata.branch')"
+   ```
+
+2. Produce a structured review at reviews/{{story_id}}.md per your prompt template.
+
+3. Verdict-driven handoff: PASS → documenter; FAIL → implementor with metadata.review_failure_summary.
+"""

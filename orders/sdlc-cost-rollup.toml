@@ -1,0 +1,5 @@
+[order]
+description = "On bead.closed, append a cost-ledger row for SDLC phase beads. Captures duration/session_id/phase/story_id/rig from bead metadata; cost_usd stays 0 until Gas City exposes per-session token usage."
+trigger = "event"
+event = "bead.closed"
+exec = "$PACK_DIR/scripts/sdlc-cost-rollup.sh"

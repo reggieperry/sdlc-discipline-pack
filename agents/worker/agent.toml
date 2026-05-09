@@ -1,0 +1,10 @@
+scope = "rig"
+provider = "claude"
+prompt_template = "agents/worker/prompt.template.md"
+wake_mode = "fresh"
+work_dir = ".gc/worktrees/{{.Rig}}/sdlc/{{.AgentBase}}"
+nudge = "Run gc hook; check assigned work and routed pool work, then follow mol-sdlc-work."
+pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}}"]
+idle_timeout = "1h"
+min_active_sessions = 0
+max_active_sessions = 5

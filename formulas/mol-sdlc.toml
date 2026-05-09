@@ -1,0 +1,44 @@
+formula = "mol-sdlc"
+description = "Kick off the SDLC chain for a story bead. One step that hands the story to the worker pool. The pool's reconciler spawns a fresh worker that walks mol-sdlc-work end-to-end (plan → implement → test → self-review → submit) and reassigns to a reviewer; the reviewer hands off to the documenter; the documenter merges and closes."
+version = 2
+
+[vars.story_id]
+description = "ID of the story bead to drive through the SDLC chain"
+required = true
+
+[[steps]]
+id = "kick-off"
+title = "Start SDLC chain for {{story_id}}"
+description = """
+You are starting the SDLC chain for story bead {{story_id}}. Your only job is to dispatch the story to the worker pool; the chain proceeds asynchronously from there via per-agent handoffs.
+
+1. Read the story:
+   ```bash
+   bd show {{story_id}} --json
+   ```
+
+2. Route the story to the worker pool. Pool agents (no `[[named_session]]`) are
+   addressed via `metadata.gc.routed_to` only — do NOT set `--assignee`,
+   because the supervisor's default scale-check filters `--unassigned`. An
+   assigned bead does not count as pool demand and the pool stays at min=0:
+   ```bash
+   RIG="${GC_RIG:-csv2json}"
+   WORKER_TARGET="$RIG/sdlc-discipline.worker"
+   bd update {{story_id}} \\
+     --status=open \\
+     --set-metadata gc.routed_to="$WORKER_TARGET" \\
+     --set-metadata sdlc_run_started="$(date -Iseconds)"
+   ```
+
+3. Add an SDLC kickoff note on the story:
+   ```bash
+   bd update {{story_id}} --append-notes "SDLC kickoff at $(date -Iseconds): worker → reviewer → documenter."
+   ```
+
+4. Close your own step. The chain proceeds asynchronously from here:
+   ```bash
+   bd close $YOUR_STEP_BEAD_ID --reason "SDLC chain started for {{story_id}}; worker pool is up next"
+   ```
+
+You do NOT plan, build, test, review, or document in this step. You hand the story to the worker pool and exit. The pool's reconciler spawns a fresh worker (because the worker template is `wake_mode = "fresh"` and has no existing alive session it would attach to — pool agents are not named sessions, so gascity#1893's alive-session stall does not apply here).
+"""

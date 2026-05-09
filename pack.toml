@@ -1,0 +1,22 @@
+[pack]
+name = "sdlc-discipline"
+schema = 2
+
+# v2.0: five-pool polecat-pattern architecture, zero named sessions.
+#
+# All five SDLC roles (worker, tester, reviewer, documenter, finalizer) are
+# pool agents — multiple concurrent instances per rig, each in its own
+# per-instance worktree. None are declared as [[named_session]] entries;
+# the supervisor scales each pool based on demand routed to its template
+# name via metadata.gc.routed_to.
+#
+# Bead handoffs between pools must set ONLY gc.routed_to (never --assignee).
+# The supervisor's default scale-check filters --unassigned; an assigned
+# bead is invisible to the pool reconciler and the chain stalls. See the
+# pack's comparison/v2.0a-stall-record.json for the regression that
+# motivated this convention.
+#
+# Concurrency at this pack version is bounded by host CPU/RAM and the
+# Anthropic API per-account rate limits, not by named-session
+# serialization. The chain runs as many stories in parallel as the host
+# and the rate-limit ceiling can sustain.

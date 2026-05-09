@@ -1,0 +1,100 @@
+{
+  "pack_version": "v1.3",
+  "pack_tag": "pack/v1.3",
+  "pack_sha": "08125487fd7840e3d464ababb61eca054abbe2b8",
+  "pack_repo": "csv2json",
+  "architecture": {
+    "agents": ["planner", "implementor", "tester", "reviewer", "documenter"],
+    "agent_shape": "all five [[named_session]]",
+    "concurrency": "single chain at a time per rig",
+    "workaround": "kickoff worker resets each named session before reassigning the story (gascity#1893)"
+  },
+  "stories": [
+    {
+      "story_id": "cs-4b2q",
+      "rig": "csv2json",
+      "title": "csv2json: --tab as a shorthand for --delimiter $'\\t'",
+      "story_file": "stories/csv2json-cs-4b2q.md",
+      "branch": "feature/v1.3-validation-rerun-tab-flag",
+      "pr_number": 15,
+      "pr_url": "https://github.com/reggieperry/gastown-pilot-csv2json/pull/15",
+      "pr_merged_at": "2026-05-09T17:55:08Z",
+      "kickoff_at": "2026-05-09T10:27:22-07:00",
+      "closed_at": "2026-05-09T10:47:46-07:00",
+      "wall_clock_seconds": 1224,
+      "wall_clock_pretty": "20m 24s",
+      "phases": {
+        "planner":     { "session_id": "bl-c6fbj", "started_at": "2026-05-09T10:29:05-07:00", "completed_at": "2026-05-09T10:30:30-07:00", "duration_seconds": 85 },
+        "implementor": { "session_id": "bl-d90tu", "started_at": "2026-05-09T10:32:42-07:00", "completed_at": "2026-05-09T10:37:48-07:00", "duration_seconds": 306 },
+        "tester":      { "session_id": "bl-yanfk", "started_at": "2026-05-09T10:40:36-07:00", "completed_at": "2026-05-09T10:41:04-07:00", "duration_seconds": 28 },
+        "reviewer":    { "session_id": "bl-r9dog", "started_at": "2026-05-09T10:42:08-07:00", "completed_at": "2026-05-09T10:44:05-07:00", "duration_seconds": 117 },
+        "documenter":  { "session_id": "bl-zh5vo", "started_at": "2026-05-09T10:45:22-07:00", "completed_at": "2026-05-09T10:47:46-07:00", "duration_seconds": 144 }
+      },
+      "outcomes": {
+        "review_verdict": "pass",
+        "test_status": "green",
+        "glance_merge": "true",
+        "pr_glance_failed": true,
+        "pr_glance_failure_reason": "R4 (208 LOC > 200; 6 files within limit)",
+        "merged_by": "human (manual)",
+        "feature_doc": "docs/features/feature-cs-4b2q-csv2json-tab-flag.md",
+        "plan_file": "plans/cs-4b2q.md",
+        "review_file": "reviews/cs-4b2q.md"
+      }
+    },
+    {
+      "story_id": "gs-id4",
+      "rig": "gh-stats",
+      "title": "gh-stats: list-prs --repo OWNER/REPO with json and table output",
+      "story_file": "stories/gh-stats-gs-id4.md",
+      "branch": "feature/gs-list-prs",
+      "pr_number": null,
+      "pr_url": null,
+      "pr_merged_at": null,
+      "note_no_pr": "gh-stats has no GitHub remote; chain landed locally on the branch",
+      "kickoff_at": "2026-05-09T12:28:00-07:00",
+      "closed_at": "2026-05-09T12:53:36-07:00",
+      "wall_clock_seconds": 1536,
+      "wall_clock_pretty": "25m 36s",
+      "phases": {
+        "planner":     { "session_id": "bl-5u9rf", "started_at": "2026-05-09T12:29:08-07:00", "completed_at": "2026-05-09T12:33:24-07:00", "duration_seconds": 256 },
+        "implementor": { "session_id": "bl-1khh2", "started_at": "2026-05-09T12:35:28-07:00", "completed_at": "2026-05-09T12:41:44-07:00", "duration_seconds": 376 },
+        "tester":      { "session_id": "bl-nuksi", "started_at": "2026-05-09T12:44:01-07:00", "completed_at": "2026-05-09T12:44:22-07:00", "duration_seconds": 21 },
+        "reviewer":    { "session_id": "bl-yljmr", "started_at": "2026-05-09T12:46:03-07:00", "completed_at": "2026-05-09T12:49:27-07:00", "duration_seconds": 204 },
+        "documenter":  { "session_id": "bl-3al5t", "started_at": "2026-05-09T12:50:20-07:00", "completed_at": "2026-05-09T12:53:36-07:00", "duration_seconds": 196 }
+      },
+      "outcomes": {
+        "review_verdict": "pass",
+        "test_status": "green",
+        "test_summary": "12 passed in 1.06s, coverage 96.21%",
+        "glance_merge": "false",
+        "feature_doc": "docs/features/feature-gs-id4-list-prs.md",
+        "plan_file": "plans/gs-id4.md",
+        "review_file": "reviews/gs-id4.md"
+      }
+    }
+  ],
+  "summary": {
+    "stories_completed": 2,
+    "stories_stalled": 0,
+    "max_concurrent_chains_observed": 1,
+    "concurrency_capability": "single",
+    "wall_clock_seconds_mean": 1380,
+    "wall_clock_seconds_total": 2760,
+    "phase_duration_seconds_mean": {
+      "planner": 170,
+      "implementor": 341,
+      "tester": 24,
+      "reviewer": 160,
+      "documenter": 170
+    },
+    "inter_phase_gap_seconds_mean": {
+      "kickoff_to_planner": 113,
+      "planner_to_implementor": 138,
+      "implementor_to_tester": 134,
+      "tester_to_reviewer": 84,
+      "reviewer_to_documenter": 84
+    },
+    "notes_on_inter_phase_gaps": "Each gap is the time the kickoff worker (or a phase agent) needed to reset and reassign to the next named session. A pool architecture should reduce these to under 30 seconds by spawning fresh sessions on demand instead of resetting one canonical session."
+  }
+}

@@ -1,0 +1,10 @@
+scope = "rig"
+provider = "claude"
+prompt_template = "agents/reviewer/prompt.template.md"
+wake_mode = "fresh"
+work_dir = ".gc/worktrees/{{.Rig}}/sdlc-reviewers/{{.AgentBase}}"
+nudge = "Run gc hook; review the assigned bead's branch against its plan."
+pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}}"]
+idle_timeout = "30m"
+min_active_sessions = 0
+max_active_sessions = 3

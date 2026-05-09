@@ -1,0 +1,24 @@
+formula = "mol-test"
+description = "Run the test suite against the implementor's branch. One recovery attempt allowed. Hand off to reviewer (green) or back to implementor (red)."
+version = 1
+
+[vars.story_id]
+description = "ID of the story bead to test (must have metadata.branch set)"
+required = true
+
+[[steps]]
+id = "run-tests"
+title = "Test story {{story_id}}"
+description = """
+You are testing story bead {{story_id}}.
+
+1. Check out the implementor's branch:
+   ```bash
+   BRANCH=$(bd show {{story_id}} --json | jq -r '.[0].metadata.branch')
+   git fetch origin && git checkout "$BRANCH"
+   ```
+
+2. Run the test suite. Decide green-or-handback per your prompt template.
+
+3. ONE recovery attempt allowed for clear implementor misses (off-by-one, wrong assertion shape). For real test failures requiring redesign, hand back without patching.
+"""

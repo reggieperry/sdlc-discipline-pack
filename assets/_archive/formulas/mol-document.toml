@@ -1,0 +1,28 @@
+formula = "mol-document"
+description = "Write the per-feature documentation: full feature doc + conditional-docs registry entry. Closes the story bead with success."
+version = 1
+
+[vars.story_id]
+description = "ID of the story bead to document (must have metadata.review_verdict=pass)"
+required = true
+
+[[steps]]
+id = "document-feature"
+title = "Document story {{story_id}}"
+description = """
+You are documenting story bead {{story_id}}.
+
+1. Check out the branch and read context:
+   ```bash
+   BRANCH=$(bd show {{story_id}} --json | jq -r '.[0].metadata.branch')
+   git fetch origin && git checkout "$BRANCH"
+   ```
+
+2. Write two files per your prompt template:
+   - `docs/features/feature-{{story_id}}-<slug>.md` (full doc)
+   - `.claude/conditional_docs/feature-{{story_id}}-<slug>.md` (registry entry)
+
+3. Commit, push. Close the STORY bead with success. Close your own step.
+
+This is the chain's terminal phase. After document closes, the story is done.
+"""

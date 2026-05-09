@@ -1,0 +1,7 @@
+scope = "rig"
+provider = "claude"
+prompt_template = "agents/tester/prompt.template.md"
+wake_mode = "fresh"
+idle_timeout = "30m"
+min_active_sessions = 0
+max_active_sessions = 2

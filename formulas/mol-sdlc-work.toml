@@ -1,0 +1,496 @@
+formula = "mol-sdlc-work"
+description = """
+SDLC worker lifecycle — single-session, multi-step. The worker walks
+load-context, plan, workspace-setup, implement, self-audit, and
+submit in one conversation, then hands the bead off to a tester pool.
+No inter-session bead handoffs between the internal phases — they are
+formula steps inside the same session.
+
+## Worker contract (self-cleaning model)
+
+1. Receive work (bead routed to your pool template, claimed via gc hook).
+2. Follow steps in order — read each step description, execute, move on.
+3. Submit: push branch, set metadata on work bead, route to tester pool, exit.
+4. You are GONE — the tester validates; the reviewer audits; the documenter
+   writes docs; the finalizer merges.
+
+Work beads flow: pool → worker → tester → reviewer → documenter →
+finalizer → closed. Each transition between pools sets only
+`gc.routed_to` (never `--assignee`); the supervisor's default
+scale-check filters `--unassigned`.
+
+## Failure modes
+
+| Situation | Action |
+|-----------|--------|
+| Bounced from tester (red tests) | Resume from existing branch; fix the failure_summary; re-submit. |
+| Bounced from reviewer (blocker) | Resume from existing branch; address rejection_reason; re-submit. |
+| Blocked on requirements | Mail witness; mark story `escalated`; drain-ack and exit. |
+| Context filling | `gc runtime request-restart`; the new session resumes from `metadata.current_step`. |
+| Sensitive file would change | Plan must declare it; submit step blocks if it changed without declaration. |
+"""
+version = 2
+
+[vars.story_id]
+description = "ID of the story bead to drive through the SDLC chain"
+required = true
+
+
+[[steps]]
+id = "load-context"
+title = "Read the bead and the rig's project context"
+description = """
+You are starting work on story bead {{story_id}}. Read everything you need
+once, up front; do not return to this step later.
+
+```bash
+bd show {{story_id}} --json
+```
+
+Pay attention to the bead's `description` (the story's outcome and
+acceptance criteria), `metadata.target` (the base branch — defaults to
+the rig's default branch when absent), and any existing
+`metadata.current_step` indicating a resumed run.
+
+Then read the rig's project context:
+
+- `CLAUDE.md` — domain context, stack, conventions, sensitive-files list (if any).
+- `README.md` — what the project is, what it ships, what's out of scope.
+- The rig's directory layout — where production code lives, where tests live.
+
+Discipline rules in `.claude/rules/` auto-load on file edits as you work.
+Do not read them eagerly here; their globs will fire when relevant.
+
+Record that you've started:
+
+```bash
+PHASE="worker"
+RIG="${GC_RIG:-csv2json}"
+bd update {{story_id}} \\
+  --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \\
+  --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \\
+  --set-metadata "rig=${RIG}" \\
+  --set-metadata "current_step=plan"
+```
+
+**Exit criteria:** You have read the bead's description and the rig's
+CLAUDE.md and README. You can name the outcome in one sentence and list
+the acceptance criteria from memory.
+"""
+
+
+[[steps]]
+id = "plan"
+title = "Write the plan to plans/{{story_id}}.md"
+needs = ["load-context"]
+description = """
+Produce a written implementation plan that the build step (next) executes
+against. Plans are not optional — TDD discipline depends on a plan whose
+acceptance criteria the test suite can run.
+
+Write the plan to `plans/{{story_id}}.md` (create the directory if needed).
+Use this exact structure:
+
+```markdown
+# Plan: <story title from the bead>
+
+## Outcome
+
+<One line, user-observable. Not "refactor X" — "users can do Y."
+
+## Acceptance criteria
+
+- [ ] <Each criterion is a check the test suite can run, not a vibe.>
+- [ ] <At least three criteria; each tied to a behavior.>
+- [ ] <Existing behavior preserved unless the story explicitly changes it.>
+
+## Scope
+
+**In:** <files or modules the plan touches>
+**Out:** <explicit exclusions; what this plan deliberately does NOT do>
+
+## Sensitive files
+
+<List paths from the rig's CLAUDE.md sensitive-files list that the plan
+would touch. If none: state "None.">
+
+## Steps
+
+Each step is a Red/Green/Refactor cycle. The build step executes them in order.
+
+1. **<Behavior name>** — Red: write `tests/test_<area>.py::test_<name>`
+   asserting the Then clause given the Given/When setup. Run; confirm
+   it fails for the right reason. Green: implement the minimum code to
+   pass. Refactor: clean up; rerun.
+2. **<Behavior name>** — Red: ... Green: ... Refactor: ...
+3. ...
+```
+
+## Discipline
+
+- **TDD first.** Each behavior gets a failing test before any production
+  code. The plan must name the test file path and the pytest function name.
+- **Bounded scope.** Don't plan beyond what the story declares. If the
+  story is a `--pretty` flag, don't add `--no-pretty`, `--indent`, or
+  schema validation under the same plan.
+- **Concrete acceptance criteria.** Each criterion is a check the test
+  suite can run. "Looks reasonable" or "is robust" are not criteria.
+- **No invented requirements.** The story is the contract. Don't add
+  criteria the story doesn't imply, even if you'd write them yourself.
+- **Sensitive files explicit.** If you would touch a sensitive file,
+  name it. The submit step will block silent edits.
+
+Record the plan path:
+
+```bash
+bd update {{story_id}} \\
+  --set-metadata plan_file="plans/{{story_id}}.md" \\
+  --set-metadata current_step="workspace-setup"
+```
+
+If you cannot produce a plan (story is too vague, sensitive-file scope
+unclear), append a note explaining what's needed and escalate to witness:
+
+```bash
+bd update {{story_id}} --status=escalated --append-notes "cannot plan: <reason>"
+WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
+gc mail send "$WITNESS_TARGET" -s "ESCALATION: cannot plan {{story_id}} [HIGH]" -m "<details>"
+gc runtime drain-ack
+exit
+```
+
+**Exit criteria:** `plans/{{story_id}}.md` exists, follows the structure
+above, and contains at least three concrete acceptance criteria. The
+sensitive-files section is filled in (with "None." if applicable). The
+bead's `metadata.plan_file` and `metadata.current_step` are set.
+"""
+
+
+[[steps]]
+id = "workspace-setup"
+title = "Create the per-bead git worktree and feature branch"
+needs = ["plan"]
+description = """
+Set up an isolated git worktree scoped to this bead and a feature branch
+on which to commit your work. Every step is idempotent — safe to re-run
+after a crash or restart.
+
+The base branch comes from `metadata.target` on the bead, or the rig's
+default branch if `target` is not set.
+
+```bash
+TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // empty')
+if [ -z "$TARGET" ]; then
+    TARGET=$(git -C "$RIG_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
+    TARGET="${TARGET:-main}"
+fi
+```
+
+**1. Fetch latest:**
+
+```bash
+cd "$RIG_ROOT"
+git fetch --prune origin
+```
+
+**2. Ensure the bead-scoped worktree exists.**
+
+Worktrees are scoped to the bead, not the worker instance, so a different
+worker can pick up this bead after a restart and find the same workspace.
+
+```bash
+WORKTREE=$(bd show {{story_id}} --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
+    cd "$WORKTREE"
+else
+    WORKTREE_PATH="$RIG_ROOT/.gc/worktrees/$(bd show {{story_id}} --json | jq -r '.[0].metadata.rig // "rig"')/sdlc/{{story_id}}"
+    mkdir -p "$(dirname "$WORKTREE_PATH")"
+    git worktree add "$WORKTREE_PATH" --detach "origin/$TARGET"
+    cd "$WORKTREE_PATH"
+    bd update {{story_id}} --set-metadata work_dir="$WORKTREE_PATH"
+fi
+```
+
+**3. Ensure the feature branch exists.**
+
+```bash
+BRANCH=$(bd show {{story_id}} --json | jq -r '.[0].metadata.branch // empty')
+if [ -z "$BRANCH" ]; then
+    BRANCH="feature/{{story_id}}"
+fi
+
+git fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
+if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    # Branch exists on remote — track it (resumed work)
+    if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH" && git merge --ff-only "origin/$BRANCH"
+    else
+        git checkout --track -b "$BRANCH" "origin/$BRANCH"
+    fi
+elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git checkout "$BRANCH"
+else
+    # Fresh branch off the freshly-fetched remote tip
+    git checkout -B "$BRANCH" "origin/$TARGET"
+fi
+bd update {{story_id}} --set-metadata branch="$BRANCH"
+```
+
+**4. Project setup (stack-specific):**
+
+```bash
+# Python projects with uv (the pack's default assumption)
+[ -f pyproject.toml ] && uv sync --group dev 2>&1 | tail -3
+```
+
+If the rig uses a different toolchain, the project's CLAUDE.md should say
+so; adapt the setup command accordingly.
+
+**5. Record the step:**
+
+```bash
+bd update {{story_id}} --set-metadata current_step="implement"
+```
+
+**Exit criteria:** Current working directory is inside the bead-scoped
+worktree. On a feature branch named in `metadata.branch`. Working tree
+clean. Dependencies installed. The bead has `metadata.work_dir` and
+`metadata.branch` set.
+"""
+
+
+[[steps]]
+id = "implement"
+title = "Walk the plan's R/G/R cycles in order"
+needs = ["workspace-setup"]
+description = """
+Execute the plan's steps in order. Each step is a Red/Green/Refactor
+cycle: write a failing test that names the behavior, implement the
+minimum code to pass, refactor under the green tests.
+
+For every cycle:
+
+1. **Red.** Write the test named in the plan. Run `uv run pytest <path> -v`.
+   Confirm it fails for the right reason. If it fails for a different
+   reason, fix the misunderstanding before writing implementation code.
+2. **Green.** Implement the minimum code to make the test pass. Don't
+   over-implement — only the named behavior.
+3. **Refactor.** Clean up under the green tests. Apply only refactorings
+   from the catalog (Extract Function, Rename, etc. — see `refactoring.md`
+   when its glob fires). If you cannot name the move from the catalog,
+   you are not refactoring; you are rewriting. Stop.
+4. **Commit.** A separate commit for each move; never bundle a feature
+   commit with a refactor commit. Two-Hats discipline:
+   - `feat(<area>): <behavior>` — a new behavior pinned by its test
+   - `test(<area>): <behavior>` — a test that pins existing behavior
+   - `refactor(<area>): <move-name from catalog>` — pure restructuring
+   - `chore(<area>): <housekeeping>` — lints, type-noqa, tooling fixes
+
+Per-cycle commits matter — the safety net of refactoring is the ability
+to revert a single move when something breaks downstream. Squashing is
+the documenter's call at merge time, not yours.
+
+## Discipline rules
+
+The rig's `.claude/rules/` directory has the discipline rules. They
+auto-load when you edit matching files. Notable ones for this step:
+
+- `python.md` — function bodies under 25 lines, prose-only docstrings,
+  no `dict[str, Any]` returns, specific exception types, type hints
+  everywhere, f-strings only, no bare except.
+- `tdd.md` — behavior-named tests, diagnostic messages on assertions
+  in domain language, mocks are peers (not internals), allowances vs.
+  expectations distinction.
+- `code-structure.md` — Tell-Don't-Ask, return typed output don't
+  mutate shared state, domain-typed equality.
+- `modularity.md` — ≤7 public names per module, no fat connections,
+  specific resource ownership.
+- `refactoring.md` — Two Hats, the catalog of moves, R/G/R rhythm.
+
+If a rule fires and contradicts what you're about to do, the rule wins.
+
+## Sensitive files
+
+If your plan declared sensitive files, edit them only as the plan said.
+If a step would touch a sensitive file the plan did not declare, STOP.
+Update the plan first (this step is allowed to amend `plans/{{story_id}}.md`),
+then proceed.
+
+## When done
+
+```bash
+bd update {{story_id}} --set-metadata current_step="self-audit"
+```
+
+**Exit criteria:** Every R/G/R cycle from the plan has a feat/test
+commit pair (and possibly a refactor commit). The working tree is clean.
+The branch contains commits in plan order, not jumbled.
+"""
+
+
+[[steps]]
+id = "self-audit"
+title = "Lint, type-check, and audit your work against the rule self-audits before handoff"
+needs = ["implement"]
+description = """
+This step is your last chance to catch issues before handoff to the
+tester pool. Run the fast checks (lint, types) inline, then walk the
+rule self-audits.
+
+You do NOT run the full pytest suite here — that is the tester pool's
+job. The tester runs in a fresh-context session with its own LLM
+budget, which is the right place to investigate test failures cleanly.
+You run the cheap, instant checks (ruff, mypy) so you don't push code
+that is obviously broken on the surface.
+
+## Lint and type-check
+
+```bash
+uv run ruff check .
+RUFF_RC=$?
+
+uv run mypy .
+MYPY_RC=$?
+```
+
+Both clean before proceeding. Fix any new violations as `chore(<area>):
+<short reason>` commits. If the rig uses different tooling, the rig's
+`CLAUDE.md` should say so; adapt accordingly.
+
+## Rule self-audits
+
+The rule files have explicit self-audit sections — they are binary
+checklists, no partial credit. Walk them.
+
+The audits that matter at this stage:
+
+- `python.md`'s self-review gate (9 items)
+- `tdd.md`'s self-audit (12 items, focused on test discipline)
+- `refactoring.md`'s self-audit (12 items, focused on Two Hats and
+  the catalog)
+- `modularity.md`'s self-audit (15 items, focused on level ownership
+  and connection-as-assumption)
+- `code-structure.md`'s testing principles section
+- `decoupling.md`'s self-audit if you touched anything under `.claude/`
+
+For each item: read it, check whether your work passes, fix what fails.
+
+## Common issues to look for
+
+- A function body over 25 lines that is doing two things — Extract Function.
+- An assertion without a domain-language diagnostic message —
+  `assert x > 0, f"expected positive value, got {x}"`.
+- A test name that describes a method rather than a behavior — rename.
+- A mock for something the SUT owns rather than a peer — refactor.
+- A `dict[str, Any]` return on a public surface — type it.
+- A `# noqa` without a comment naming why — add one or remove the noqa.
+
+## Plan compliance
+
+Read your plan again. For each acceptance criterion: which test pins
+it? If any criterion has no pinning test, you are not done — write the
+test now (Red, then Green) and amend the implement step's commit
+sequence. Do not assume the tester will catch a missing-test gap; the
+tester runs your tests, it does not invent new ones.
+
+## Recording
+
+```bash
+bd update {{story_id}} --set-metadata current_step="submit-and-exit"
+```
+
+**Exit criteria:** ruff and mypy clean. Every audit item passes or has
+an explicit `# noqa` or in-line note explaining the deviation. Every
+acceptance criterion from the plan is pinned by a test. The bead's
+`current_step` is `submit-and-exit`.
+"""
+
+
+[[steps]]
+id = "submit-and-exit"
+title = "Push branch, route to tester pool, drain-ack, exit"
+needs = ["self-audit"]
+description = """
+Hand off your work and clean up. You cease to exist after this step.
+
+**1. Verify clean working state:**
+
+```bash
+git status --porcelain
+```
+
+If anything outputs, you have uncommitted work. Either commit it under
+the right hat (feat/test/refactor/chore) or stash and investigate. Never
+push with untracked work left behind.
+
+**2. Sensitive-files gate:**
+
+```bash
+PLANNED=$(awk '/## Sensitive files/{flag=1; next} /^## /{flag=0} flag' plans/{{story_id}}.md)
+CHANGED=$(git diff --name-only origin/$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"'))
+```
+
+If any path in `CHANGED` matches an entry in the rig's CLAUDE.md
+sensitive-files list and is not declared in `PLANNED`, **STOP**. Update
+the plan to declare the file, commit the plan amendment as
+`docs(plan): declare <path> as touched`, and re-run this step. Do not
+push silently-changed sensitive files.
+
+**3. Push the branch:**
+
+```bash
+git push -u origin "$(git branch --show-current)"
+```
+
+If `SDLC_OPEN_PR_DEFAULT=true` for this rig, also open the PR:
+
+```bash
+if [ "${SDLC_OPEN_PR_DEFAULT:-false}" = "true" ]; then
+    PR_URL=$(gh pr create \\
+        --title "$(bd show {{story_id}} --json | jq -r '.[0].title')" \\
+        --body-file plans/{{story_id}}.md \\
+        --base "$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"')" \\
+        2>&1 | grep -oP 'https://github.com/[^ ]+')
+    bd update {{story_id}} --set-metadata pr_url="$PR_URL"
+fi
+```
+
+If `SDLC_OPEN_PR_DEFAULT=false`, the branch sits on the remote (or
+locally only) for the documenter or human operator to PR later.
+
+**4. Record metadata for cost-rollup and handoff:**
+
+```bash
+bd update {{story_id}} \\
+  --set-metadata target="$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"')" \\
+  --set-metadata branch="$(git branch --show-current)" \\
+  --set-metadata worker.completed_at="$(date -Iseconds)" \\
+  --set-metadata current_step="tester"
+```
+
+**5. Route to the tester pool.** Tester is a pool agent (no
+`[[named_session]]`), so set ONLY `gc.routed_to`. Setting `--assignee` would
+make the bead "assigned" and the supervisor's default scale-check
+(filters `--unassigned`) would not see the demand; the pool would stay
+at min=0 and the chain would stall.
+
+```bash
+RIG="${GC_RIG:-csv2json}"
+TESTER_TARGET="$RIG/sdlc-discipline.tester"
+bd update {{story_id}} --status=open --set-metadata gc.routed_to="$TESTER_TARGET"
+```
+
+**6. Drain and exit:**
+
+```bash
+gc runtime drain-ack
+exit
+```
+
+`gc runtime drain-ack` tells the reconciler to kill this session. The
+reconciler only respawns a worker if the pool sees more bead demand.
+You are done. Done means gone.
+
+**Exit criteria:** Branch pushed; bead routed to tester pool; metadata
+includes `branch`, `target`, `worker.completed_at`; session drained.
+"""

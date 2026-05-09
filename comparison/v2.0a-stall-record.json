@@ -1,0 +1,36 @@
+{
+  "pack_version": "v2.0a (interim, not shipped)",
+  "pack_sha": "5889162",
+  "pack_repo": "csv2json",
+  "architecture": {
+    "agents": ["worker (pool, max=5)", "reviewer (pool, max=3)", "documenter (named, on_demand)"],
+    "agent_shape": "two pools + one named session",
+    "concurrency": "multiple workers in flight; single documenter serializing",
+    "workaround": "none — the gascity#1893 workaround was removed but the bug re-surfaced via a different path"
+  },
+  "stalls": [
+    {
+      "story_id": "gs-hdpw",
+      "rig": "gh-stats",
+      "title": "gh-stats: time-to-merge histogram with json, table, markdown output",
+      "story_file": "stories/gh-stats-gs-hdpw.md",
+      "branch": "feature/gs-hdpw",
+      "kickoff_at": "2026-05-09T13:46:05-07:00",
+      "stall_observed_at": "2026-05-09T14:40:48-07:00",
+      "stall_phase": "documenter",
+      "stall_root_cause": "kickoff routed the bead to gh-stats/sdlc-discipline.worker by setting BOTH --assignee and gc.routed_to. The pool's EffectiveScaleCheck filters --unassigned, so the bead was invisible to the pool reconciler. Pool stayed at 0/5 for 13 minutes; chain only proceeded once --assignee was cleared manually. The same routing bug then re-surfaced at the worker→reviewer→documenter handoffs.",
+      "phases_observed": {
+        "kickoff_to_worker_gap_seconds": 1768,
+        "worker": { "session_id": "bl-b0fcr", "started_at": "2026-05-09T14:15:33-07:00", "completed_at": "2026-05-09T14:33:52-07:00", "duration_seconds": 1099 },
+        "reviewer": { "session_id": "bl-b0fcr", "started_at": "2026-05-09T14:35:44-07:00", "completed_at": "2026-05-09T14:40:48-07:00", "duration_seconds": 304, "note": "session_id matches worker — single-conversation continuation, an artifact of v2.0a's reviewer-as-pool-template config; verify on next replay" },
+        "documenter": { "started_at": null, "completed_at": null, "note": "never spawned; routing-bug stall" }
+      },
+      "lessons_for_v2.0": [
+        "Pool routing must use gc.routed_to ONLY — never --assignee — at every pool→pool transition",
+        "The gascity#1893 workaround removal is correct, but the codebase needs an explicit handoff-convention test that catches --assignee on pool targets in CI",
+        "Per-bead worktree pattern (.gc/worktrees/<rig>/sdlc/<bead-id>) is correct and survives the routing fix",
+        "Phase-completion metadata writes (worker.completed_at, reviewer.completed_at) work correctly in pool agents — the bug is in routing, not lifecycle"
+      ]
+    }
+  ]
+}

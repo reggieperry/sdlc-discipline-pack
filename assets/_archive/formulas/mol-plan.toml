@@ -1,0 +1,36 @@
+formula = "mol-plan"
+description = "Generate an implementation plan for a story bead. Slung against the planner agent; the planner reads the referenced story bead, produces a plan markdown at plans/<story_id>.md, and records metadata.plan_file on the story."
+version = 1
+
+[vars.story_id]
+description = "ID of the story bead to plan against (e.g., cs-abc)"
+required = true
+
+[[steps]]
+id = "produce-plan"
+title = "Plan story {{story_id}}"
+description = """
+You are planning story bead {{story_id}}.
+
+1. Read the story:
+   ```bash
+   bd show {{story_id}} --json
+   ```
+   The story's title and description are the contract. Acceptance criteria embedded in the description bound the work.
+
+2. Read project context:
+   - The rig's CLAUDE.md (domain context + sensitive files)
+   - The rig's README.md (stack, scope)
+   - Auto-loaded rules in .claude/rules/ (discipline)
+
+3. Produce a plan following the format in your prompt template. Write it to `plans/{{story_id}}.md` (create the directory if needed).
+
+4. Record the plan path on the story bead:
+   ```bash
+   bd update {{story_id}} --set-metadata plan_file=plans/{{story_id}}.md
+   ```
+
+5. Add a closing note on your own step bead with the plan path, then close yourself.
+
+If you cannot plan (story is too vague, scope conflict, wrong issue type) — annotate the story bead with what's needed and close your step with reason `cannot-plan: <short>`. Do not write a half-formed plan.
+"""

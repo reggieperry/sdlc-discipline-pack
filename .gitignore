@@ -1,0 +1,35 @@
+# Editor and OS noise
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Gas City runtime (created when this repo is checked out into a workspace)
+.gc/
+.runtime/
+
+# Bead store (rig-specific, never lives at pack root in production)
+.beads/
+
+# Session and rule logs (per-session UUIDs; runtime artifacts)
+logs/
+rules/logs/
+
+# Chain artifacts (per-bead worktrees produce these in the rig, not the pack)
+plans/
+reviews/
+trees/
+
+# Python (in case any pack script grows a temporary Python helper)
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/

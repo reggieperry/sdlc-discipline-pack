@@ -1,0 +1,10 @@
+scope = "rig"
+provider = "claude"
+prompt_template = "agents/finalizer/prompt.template.md"
+wake_mode = "fresh"
+work_dir = ".gc/worktrees/{{.Rig}}/sdlc-finalizers/{{.AgentBase}}"
+nudge = "Run gc hook; check assigned work and routed pool work, then refresh the PR and run the auto-merge gate."
+pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}}"]
+idle_timeout = "30m"
+min_active_sessions = 0
+max_active_sessions = 2
