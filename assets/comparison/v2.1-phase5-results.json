@@ -1,0 +1,104 @@
+{
+  "phase": "Phase 5 — failure-mode tests against v2.1.x",
+  "scope": "Top 3 high-yield tests: smoke v2.1.1, tester escalation, worker restart resume",
+  "pack_versions_tested": ["2.1.1", "2.1.2"],
+  "tests": [
+    {
+      "id": "Test 1",
+      "name": "smoke v2.1.1",
+      "rig": "gh-stats",
+      "story_id": "gs-figi",
+      "story_summary": "--version flag on the gh-stats CLI",
+      "outcome": "closed",
+      "wall_clock_seconds": 2074,
+      "wall_clock_pretty": "33m 52s",
+      "kickoff_mode": "non_llm (sdlc-kickoff.sh)",
+      "kickoff_latency_seconds": 1,
+      "all_pools_traversed": true,
+      "review_verdict": "pass",
+      "test_status": "green",
+      "final_state": "branch_ready_no_pr",
+      "no_remote_handlers_fired": [
+        "worker.push_skipped=no_remote_configured",
+        "tester.no_remote_configured=true",
+        "reviewer.no_remote_configured=true",
+        "documenter.no_remote_configured=true + push_skipped=no_remote_configured",
+        "finalizer.no_remote_configured=true (closed in 22s vs 38-50min Phase 4 stall)"
+      ],
+      "vs_v2_0_baseline_gs_uud": {
+        "v2_0_wall_clock": "46m 19s",
+        "v2_1_1_wall_clock": "33m 52s",
+        "delta_pct": "-27%",
+        "caveat": "different story shapes (gs-uud was 200 LOC list-prs; gs-figi was 30-50 LOC --version flag); per-LOC time is not strictly comparable"
+      },
+      "findings_surfaced": [
+        "gh-stats .gitignore excludes plans/ and reviews/ → reviewer recorded reviewer.no_commit_review_gitignore_conflict=true; audit trail lost. Fixed in v2.1.2 via git add -f."
+      ]
+    },
+    {
+      "id": "Test 2",
+      "name": "tester anti-weakening escalation (contradiction detection)",
+      "rig": "csv2json",
+      "story_id": "cs-08uc",
+      "story_summary": "--canonical flag with deliberately contradictory acceptance criteria (sort alphabetically AND preserve header order)",
+      "outcome": "blocked (escalation path)",
+      "wall_clock_seconds": 507,
+      "wall_clock_pretty": "8m 27s",
+      "kickoff_mode": "non_llm (sdlc-kickoff.sh)",
+      "kickoff_latency_seconds": 2,
+      "expected_path": "(a) worker detects contradiction in plan step and escalates",
+      "actual_path": "(a) worker detected contradiction in plan step and escalated",
+      "worker_did": [
+        "Read bead description and rig CLAUDE.md",
+        "Wrote a structured plan documenting the contradiction with concrete counter-example (CSV header name,age,id vs sorted age,id,name)",
+        "Considered three creative reinterpretations and rejected each with reasoning",
+        "Identified secondary scope error: csv2json/writer.py named in story Scope but does not exist on this rig",
+        "Proposed three concrete resolution paths (R1/R2/R3) for the story author to pick from",
+        "Mailed witness/mayor via gc mail send",
+        "Set bead status=blocked with worker.outcome=escalated_ac_contradiction"
+      ],
+      "worker_did_not": [
+        "Write any test code",
+        "Write any production code",
+        "Create the per-bead worktree or feature branch (workspace-setup never reached)",
+        "Pick one acceptance criterion arbitrarily"
+      ],
+      "findings_surfaced": [
+        "Worker used status=blocked despite worker prompt explicitly saying --status=escalated. Small prompt-clarity inconsistency. Tracked under v2.2 audit findings.",
+        "Plan file written before workspace-setup lives in the agent's pre_start work_dir, not a per-bead worktree. Confirms plan-file scattering finding."
+      ]
+    },
+    {
+      "id": "Test 3",
+      "name": "worker restart resume mid-chain",
+      "rig": "csv2json",
+      "story_id": "cs-h0qd",
+      "story_summary": "--count-only flag (small story used as test vehicle for restart-resume)",
+      "outcome": "closed (inconclusive for the restart-resume path)",
+      "wall_clock_seconds": 2056,
+      "wall_clock_pretty": "34m 16s",
+      "kickoff_mode": "non_llm (sdlc-kickoff.sh)",
+      "kickoff_latency_seconds": 2,
+      "expected_path": "monitor triggers gc session reset on first implement-step observation; supervisor respawns fresh worker; new worker resumes from metadata.current_step",
+      "actual_path": "monitor's 60s buffer was longer than the worker's remaining implement work; worker.completed_at=22:26:46 fired ~55s before the reset trigger at 22:27:41. The reset signal hit an already-drained session; the chain continued normally with no interruption observed.",
+      "what_was_validated": [
+        "Chain is robust to a stray gc session reset signal mid-flight (no break, no stall)",
+        "Supervisor accepted and processed the reset cleanly"
+      ],
+      "what_was_not_validated": [
+        "The documented gc runtime request-restart → supervisor respawn → resume-from-current_step path"
+      ],
+      "design_flaw_for_retest": "implement step on small stories (3-5 min) is too short for a 60s observation-then-trigger monitor. Either: (a) use a larger story (15+ min implement); (b) trigger within 30s of first implement observation; (c) accept the chain-robustness signal and move on.",
+      "incidental_observations": [
+        "All four pre-finalizer phases (worker, tester, reviewer, documenter) recorded the same session_id bl-mz3eot. The supervisor reused a single pool instance across phases on this lightly-loaded workspace. Only the finalizer got a separate session (bl-cbl9f0). Emergent behavior of low-demand pools, not a bug; tracked for the pool sizing audit."
+      ]
+    }
+  ],
+  "phase5_summary": {
+    "tests_passed": 2,
+    "tests_inconclusive": 1,
+    "bugs_found_and_fixed_inline": 1,
+    "bugs_tracked_for_v2_2": 2,
+    "ship_signal": "Pack-level architecture is sound. v2.1.x is in usable shape. Remaining backlog is bug-tier and concurrency-tier work, not architectural redesign."
+  }
+}

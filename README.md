@@ -27,8 +27,7 @@ Total max concurrent sessions per rig: 15. Bead handoffs use `metadata.gc.routed
 ```text
 sdlc-discipline/
 ├── pack.toml                          schema 2; zero [[named_session]] declarations
-├── settings.json                      portable hooks + permissions for the rig
-├── agents/
+├── agents/                            convention-discovered agent definitions
 │   ├── worker/
 │   ├── tester/
 │   ├── reviewer/
@@ -36,25 +35,30 @@ sdlc-discipline/
 │   └── finalizer/
 │       ├── agent.toml                 pool config (pre_start, max_active_sessions, idle_timeout)
 │       └── prompt.template.md         the agent's persistent identity
-├── formulas/
+├── formulas/                          *.toml formula definitions
 │   ├── mol-sdlc.toml                  kickoff (routes story to worker pool)
 │   └── mol-sdlc-work.toml             worker walks load → plan → workspace → implement → self-audit → submit
-├── rules/                             auto-loading discipline rules (TDD, Python, modularity, refactoring, …)
-├── docs/                              principal-engineer guides (DDD, GOOS, modularity, refactoring)
-├── orders/
+├── orders/                            *.toml event/scheduled tasks
 │   └── sdlc-cost-rollup.toml          observer order on bead.closed → cost_history.csv
-├── scripts/
-│   ├── sdlc-cost-rollup.sh            appends a CSV row per phase close
-│   ├── sdlc-cost-{story,session,stories}.sh   per-story / per-window / cross-story queries
-│   ├── sdlc-story-new.sh              interactive story scaffold
-│   ├── sdlc-watch.sh                  colorized live monitor
-│   ├── sdlc-demo.tmux                 four-pane tmux layout
-│   └── sdlc-glance-rubric.sh          7-check rubric for auto-merge
-├── assets/
-│   └── scripts/worktree-setup.sh      pre_start hook for all five pools
-├── comparison/                        v1.3-baseline + v2.0a-stall-record + replayable story bodies
+├── commands/                          operator-facing CLIs (commands/<id>/run.sh)
+│   ├── kickoff/run.sh                 non-LLM chain initiation (1s vs ~60-120s LLM kickoff)
+│   ├── watch/run.sh                   colorized one-line-per-phase monitor
+│   ├── story-new/run.sh               interactive story scaffold
+│   ├── cost-{story,session,stories}/  per-story / per-window / cross-story queries
+│   └── demo/run.sh                    four-pane tmux layout
+├── assets/                            opaque pack-owned files (NOT convention-discovered)
+│   ├── scripts/
+│   │   ├── worktree-setup.sh          pre_start hook for all five pools
+│   │   ├── sdlc-cost-rollup.sh        invoked by orders/sdlc-cost-rollup.toml
+│   │   └── sdlc-glance-rubric.sh      invoked by agents/finalizer/prompt.template.md
+│   ├── claude-defaults.tar.gz         drop-in .claude/ baseline for rigs without their own (rules + settings.json + conditional-docs starter)
+│   ├── docs/                          principal-engineer guides (DDD, GOOS, modularity, refactoring)
+│   └── comparison/                    v1.3-baseline + v2.0a-stall-record + chain-run results
+├── pack.toml                          metadata, agent_defaults
 └── README.md
 ```
+
+This pack ships **no top-level `rules/` directory and no top-level `settings.json`**. Per Gas City pack v2 spec, those aren't pack content — `.claude/` is Claude Code's surface, not the pack's. For rigs that don't already have their own `.claude/rules/*.md` and `.claude/settings.json`, we ship a drop-in tarball at `assets/claude-defaults.tar.gz`. For rigs that already have their own (Elder, projects with established conventions), the pack's prompts reference rule names (`python.md`, `tdd.md`, etc.) which Claude Code resolves to whatever the rig has in `.claude/rules/`. See *Bootstrapping a rig's `.claude/`* below.
 
 The non-worker pools (tester, reviewer, documenter, finalizer) drive single-conversation workflows from their prompt templates. Only the worker walks a multi-step formula because its work has structurally distinct phases inside one session.
 
@@ -169,6 +173,24 @@ gc start
 
 Brings the city up under the machine-wide supervisor. After this point, beads routed to a pool's template name will spawn fresh sessions on demand and de-scale on idle.
 
+## Bootstrapping a rig's `.claude/`
+
+Per the Gas City pack v2 spec, packs do not write to a rig's `.claude/`. Claude Code (the LLM provider) auto-loads `.claude/rules/*.md` and reads `.claude/settings.json` from whatever the rig has. This pack assumes the rig provides those files.
+
+For rigs that already have established discipline (Elder, projects with their own `.claude/rules/` content), the pack's prompts reference rule names (`python.md`, `tdd.md`, `refactoring.md`, etc.) and Claude Code auto-loads whatever the rig has under those names. Nothing to do — the pack consumes the rig's existing rules.
+
+For rigs that don't have any `.claude/rules/` content yet (a fresh repo, a pilot project, an OCaml project being onboarded), the pack ships a drop-in tarball at `assets/claude-defaults.tar.gz`:
+
+```bash
+cd <rig>
+tar -xzf <pack-cache>/assets/claude-defaults.tar.gz
+git add .claude && git commit -m "chore: bootstrap .claude/ from sdlc-discipline-pack"
+```
+
+The tarball lands `.claude/rules/{python,tdd,modularity,refactoring,code-structure,decoupling,testing,writing-style,ddd}.md`, `.claude/settings.json`, and a `.claude/conditional_docs/README.md` starter. After extraction, the rig owns the content — diverge or customize as needed.
+
+The source files for the tarball live under `assets/rules/`, `assets/settings.json`, and `assets/conditional_docs-README.md`. The build script at `assets/build-claude-defaults.sh` regenerates the tarball from those sources whenever the pack's discipline changes.
+
 ## Three operating modes
 
 Two env vars, set per-rig in `city.toml` via a patch on the finalizer agent, drive the three common scenarios.
@@ -225,7 +247,7 @@ Useful when a normally-glance-merged rig has a sensitive story that warrants hum
 
 ## The glance rubric
 
-Seven binary checks (`scripts/sdlc-glance-rubric.sh`):
+Seven binary checks (`assets/scripts/sdlc-glance-rubric.sh`):
 
 | ID | Check |
 |---|---|
@@ -252,16 +274,16 @@ Today, `cost_usd` is left as `0` because Gas City does not yet expose per-sessio
 Three query scripts:
 
 ```bash
-scripts/sdlc-cost-story.sh <story_id>          # per-phase breakdown for one story
-scripts/sdlc-cost-session.sh --since 1h        # time-window summary
-scripts/sdlc-cost-stories.sh --rig csv2json    # cross-story summary, optionally filtered
+commands/cost-story/run.sh <story_id>          # per-phase breakdown for one story
+commands/cost-session/run.sh --since 1h        # time-window summary
+commands/cost-stories/run.sh --rig csv2json    # cross-story summary, optionally filtered
 ```
 
 ## Authoring stories
 
 ```bash
 cd <rig>
-bash scripts/sdlc-story-new.sh "csv2json: add a --quiet flag"
+bash commands/story-new/run.sh "csv2json: add a --quiet flag"
 ```
 
 Opens `$EDITOR` on a prefilled markdown template with the entry-point format (Outcome / Acceptance / Scope / Sensitive / Notes). After save, prompts for `open_pr` and `base_branch` (with rig env defaults). Runs `bd create` with the description + metadata; echoes the new bead ID.
@@ -274,7 +296,7 @@ After authoring a story, kick off the SDLC pipeline. Two paths.
 
 ```bash
 cd <rig>
-bash scripts/sdlc-kickoff.sh <bead_id>
+bash commands/kickoff/run.sh <bead_id>
 ```
 
 The script sets `gc.routed_to=<rig>/sdlc-discipline.worker` on the story bead, stamps `sdlc_run_started`, leaves a kickoff note, and exits. The supervisor's pool reconciler spawns a fresh worker on its next tick and the chain proceeds.
@@ -290,7 +312,7 @@ Once the bead is routed, both paths converge: the worker's pool reconciler spawn
 ## Watching the chain
 
 ```bash
-bash scripts/sdlc-watch.sh <bead_id>
+bash commands/watch/run.sh <bead_id>
 ```
 
 Colorized one-line-per-phase monitor. Prints a line on each meaningful state transition; exits when the story closes or after 30 minutes.
@@ -298,7 +320,7 @@ Colorized one-line-per-phase monitor. Prints a line on each meaningful state tra
 For a richer multi-pane view (events stream + bead metadata + watch + artifacts):
 
 ```bash
-bash scripts/sdlc-demo.tmux <bead_id>
+bash commands/demo/run.sh <bead_id>
 ```
 
 Four-pane tmux layout. Edit the `CITY` and `RIG` paths at the top of the script for your setup, or set `SDLC_DEMO_CITY` / `SDLC_DEMO_RIG` env vars.

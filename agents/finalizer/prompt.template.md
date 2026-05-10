@@ -165,7 +165,7 @@ GLANCE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.glance_merge // empty')
 
 if [ "$GLANCE" = "true" ] && [ -n "$PR_NUMBER" ]; then
     RUBRIC_OUT=$(mktemp)
-    if bash "$RIG_PACK/scripts/sdlc-glance-rubric.sh" "$STORY_ID" > "$RUBRIC_OUT"; then
+    if bash "$RIG_PACK/assets/scripts/sdlc-glance-rubric.sh" "$STORY_ID" > "$RUBRIC_OUT"; then
         gh pr comment "$PR_NUMBER" --body-file "$RUBRIC_OUT"
         gh pr merge "$PR_NUMBER" --squash --delete-branch
         bd update $STORY_ID \
