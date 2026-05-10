@@ -133,14 +133,18 @@ Be specific in findings. "Looks fine" is not a finding. "<file>:<line> — <conc
 The review file is part of the audit trail. Commit and push it to the feature branch before routing onward (PASS or FAIL). Without this step the review file lives only in the rig's local working tree and gets clobbered when the next chain run starts.
 
 ```bash
-git add "reviews/$STORY_ID.md"
+git add -f "reviews/$STORY_ID.md"
 if ! git diff --cached --quiet; then
     git commit -m "docs(review): $STORY_ID — review verdict and findings"
-    git push origin "$(git branch --show-current)"
+    if git remote get-url origin >/dev/null 2>&1; then
+        git push origin "$(git branch --show-current)"
+    else
+        bd update $STORY_ID --set-metadata reviewer.push_skipped="no_remote_configured"
+    fi
 fi
 ```
 
-`git diff --cached --quiet` skips the commit if the review is already on the branch (e.g., from a re-routed FAIL→worker→reviewer cycle that already committed it).
+`git diff --cached --quiet` skips the commit if the review is already on the branch (e.g., from a re-routed FAIL→worker→reviewer cycle that already committed it). The `-f` flag forces the add even on rigs whose `.gitignore` excludes `reviews/` (a common pattern in rigs that pre-date the pack's audit-trail requirement). The review is part of the audit history the pack designs as committed; the local gitignore does not override that.
 
 ## When you're done — PASS
 

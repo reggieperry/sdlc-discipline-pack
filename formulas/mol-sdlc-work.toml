@@ -462,7 +462,7 @@ implemented against. Make it part of the merged history so the audit
 trail survives the next worker rotation.
 
 ```bash
-git add plans/{{story_id}}.md
+git add -f plans/{{story_id}}.md
 if ! git diff --cached --quiet; then
     git commit -m "docs(plan): {{story_id}} — implementation plan"
 fi
@@ -470,7 +470,11 @@ fi
 
 `git diff --cached --quiet` skips the commit if the plan is already on
 the branch (e.g., from a resumed worker session that already committed
-it).
+it). The `-f` flag forces the add even on rigs whose `.gitignore`
+excludes `plans/` (a common pattern in rigs that pre-date the pack's
+audit-trail requirement). The plan is the contract this story was
+built against; the pack treats it as committed history regardless of
+the rig's local gitignore.
 
 **3. Push the branch (or skip gracefully on no-remote rigs):**
 
