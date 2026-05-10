@@ -77,30 +77,53 @@ Sync project dependencies before running anything:
 
 ## Run the suite
 
+Two checks run in sequence: pytest (must pass on its own — every test green), then the differential gate (compares the branch's static-analysis state against the captured baseline; fails only on findings the worker introduced).
+
 ```bash
 PYTEST_LOG=$(mktemp)
-RUFF_LOG=$(mktemp)
-MYPY_LOG=$(mktemp)
-
 uv run pytest tests/ -v --no-cov 2>&1 | tee "$PYTEST_LOG"
 PYTEST_RC=${PIPESTATUS[0]}
+TEST_SUMMARY=$(tail -1 "$PYTEST_LOG")
 
-uv run ruff check . 2>&1 | tee "$RUFF_LOG"
-RUFF_RC=${PIPESTATUS[0]}
+BASELINE_SHA=$(bd show $STORY_ID --json | jq -r '.[0].metadata."gate.baseline_sha"')
+RIG_ROOT_ABS=$(git rev-parse --show-toplevel)
+CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 
-uv run mypy . 2>&1 | tee "$MYPY_LOG"
-MYPY_RC=${PIPESTATUS[0]}
+GATE_REPORT=$(mktemp)
+python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" > "$GATE_REPORT"
+GATE_RC=$?
+GATE_VERDICT=$(jq -r '.verdict' "$GATE_REPORT")
+GATE_BLOCKS=$(jq -c '.blocks' "$GATE_REPORT")
+GATE_ADVISORIES=$(jq -c '.advisories' "$GATE_REPORT")
 ```
 
-Capture the summary:
+If `BASELINE_SHA` is empty (the worker ran a pre-v2.4 chain or skipped capture-baseline), recapture against `metadata.target` here and re-run the diff. Do not silently accept zero-error gates without a baseline; that defeats anti-weakening.
 
 ```bash
-TEST_SUMMARY=$(tail -1 "$PYTEST_LOG")
+if [ -z "$BASELINE_SHA" ] || [ "$BASELINE_SHA" = "null" ]; then
+    TARGET=$(bd show $STORY_ID --json | jq -r '.[0].metadata.target // "main"')
+    BASELINE_SHA=$(git merge-base HEAD "origin/$TARGET")
+    CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
+    if [ ! -f "$CACHE_DIR/sha.txt" ]; then
+        SCRATCH=$(mktemp -d)
+        git -C "$RIG_ROOT_ABS" worktree add --detach "$SCRATCH" "$BASELINE_SHA"
+        ( cd "$SCRATCH" && [ -f pyproject.toml ] && uv sync --group dev >/dev/null 2>&1
+          mkdir -p .claude/sdlc-discipline
+          cp "$(pwd 2>/dev/null)/.claude/sdlc-discipline/sdlc-gate.py" .claude/sdlc-discipline/sdlc-gate.py 2>/dev/null || true
+          python3 .claude/sdlc-discipline/sdlc-gate.py baseline --sha "$BASELINE_SHA" --out "$CACHE_DIR" )
+        git -C "$RIG_ROOT_ABS" worktree remove --force "$SCRATCH"
+    fi
+    bd update $STORY_ID --set-metadata gate.baseline_sha="$BASELINE_SHA" \
+      --set-metadata gate.baseline_recovered="true"
+    python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" > "$GATE_REPORT"
+    GATE_RC=$?
+    GATE_VERDICT=$(jq -r '.verdict' "$GATE_REPORT")
+fi
 ```
 
 ## Decision
 
-**All three green (`PYTEST_RC=0`, `RUFF_RC=0`, `MYPY_RC=0`):** route to the reviewer pool.
+**`PYTEST_RC=0` AND `GATE_VERDICT` is `pass` or `advisory`:** route to reviewer.
 
 ```bash
 RIG="${GC_RIG:-csv2json}"
@@ -108,6 +131,8 @@ REVIEWER_TARGET="$RIG/sdlc-discipline.reviewer"
 bd update $STORY_ID \
   --set-metadata test_status="green" \
   --set-metadata test_summary="$TEST_SUMMARY" \
+  --set-metadata gate.verdict="$GATE_VERDICT" \
+  --set-metadata gate.advisories="$GATE_ADVISORIES" \
   --set-metadata "tester.completed_at=$(date -Iseconds)" \
   --set-metadata current_step="reviewer"
 bd update $STORY_ID --status=open --set-metadata gc.routed_to="$REVIEWER_TARGET"
@@ -115,20 +140,20 @@ gc runtime drain-ack
 exit
 ```
 
-**Anything red:** attempt resolution. Walk up to three resolution rounds before bouncing the bead back to the worker pool with a concrete failure summary.
+If the verdict was `advisory`, the reviewer reads `gate.advisories` and decides whether the soft signals (cross-file relocations, test-file deletions) are story-appropriate.
+
+**`PYTEST_RC≠0` OR `GATE_VERDICT=fail`:** attempt resolution. Walk up to three rounds before bouncing.
 
 ## Resolution loop (up to three rounds)
 
-For each red signal — pytest failure, ruff violation, mypy error — diagnose and apply a narrow fix. Discipline rules:
+For each failure signal — pytest red or a `blocks[]` entry from the gate — diagnose and apply a narrow fix. Discipline:
 
-- **Anti-weakening.** Fixing a test by deleting an assertion, lowering coverage, or `# type: ignore`-ing the failure is not resolution. It is hiding the failure. If you cannot make the test pass on the production code's terms, escalate via `CANNOT_RESOLVE:` rather than weaken.
-- **Stay in scope.** Resolution edits are limited to the files the worker's branch already touched (`git diff --name-only origin/$TARGET`). If the failure traces to a file the worker did not touch, it is a regression you cannot fix here — surface it via `CANNOT_RESOLVE:` and let the worker investigate.
-- **One fix per commit.** Use `chore(test):`, `chore(lint):`, or `chore(types):` per the failure category. Do not bundle.
-- **Re-run the full suite after each fix.** A fix that resolves one red signal can introduce another.
+- **Anti-weakening is mechanical now.** The gate's Check B (suppression count) and Check D (skip markers, lost asserts) catches `# type: ignore`, `# noqa`, `@pytest.mark.skip`, and deleted asserts that the worker added. If you fix a pytest failure by adding any of these, the gate fails on the next round. Do not try; bounce instead.
+- **Stay in scope.** Resolution edits are limited to files the worker's branch already touched (`git diff --name-only $BASELINE_SHA`). The gate's Check A blocks list will name the offending files; if any are outside that set, it is a baseline drift problem, not a worker problem — escalate.
+- **One fix per commit.** Use `chore(test):`, `chore(lint):`, or `chore(types):` per the gate's check label. Do not bundle.
+- **Re-run pytest and the gate after each fix.**
 
-After each round, recompute `PYTEST_RC`, `RUFF_RC`, `MYPY_RC`. If all three are green, fall through to the green-path handoff above. If still red after three rounds, escalate.
-
-If at any point you find yourself wanting to delete a test assertion, change a property's allowed range to make hypothesis pass, add a `# type: ignore`, or `# noqa` a ruff finding without a written reason, STOP. Emit `CANNOT_RESOLVE:` with the failure summary and bounce to the worker pool.
+After each round, re-run pytest and the gate. If both pass (verdict in `pass`/`advisory` and `PYTEST_RC=0`), fall through to the green-path handoff. If still red after three rounds, bounce to worker.
 
 ## Bounce to worker (red after three rounds, or unresolvable)
 
@@ -138,7 +163,9 @@ WORKER_TARGET="$RIG/sdlc-discipline.worker"
 bd update $STORY_ID \
   --set-metadata test_status="red" \
   --set-metadata test_summary="$TEST_SUMMARY" \
-  --set-metadata test_failure_category="<pytest|ruff|mypy>" \
+  --set-metadata gate.verdict="$GATE_VERDICT" \
+  --set-metadata gate.blocks="$GATE_BLOCKS" \
+  --set-metadata test_failure_category="<pytest|gate>" \
   --set-metadata test_failure_summary="<one-line>" \
   --set-metadata test_resolution_attempts="<n>" \
   --set-metadata "tester.completed_at=$(date -Iseconds)"
@@ -147,11 +174,11 @@ gc runtime drain-ack
 exit
 ```
 
-The worker pool will see a bead with `test_status=red` and `test_failure_summary` and resume from the existing branch with a fresh worker instance — fixing the failure rather than starting over.
+The worker pool sees a bead with `test_status=red`, `gate.blocks` (structured), and `test_failure_summary`. A fresh worker resumes the existing branch and addresses each block.
 
 ## Escalation
 
-If the failure traces to environment problems (missing test fixtures the worker did not author, broken dev-dependency lockfile, unreachable database) rather than a regression you can fix or the worker can fix, escalate to witness:
+If the failure is environment-level — missing test fixtures the worker did not author, broken dev-dependency lockfile, unreachable database — escalate to witness rather than bounce:
 
 ```bash
 WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
@@ -161,6 +188,8 @@ bd update $STORY_ID --status=escalated --notes "test blocked: <reason>"
 gc runtime drain-ack
 exit
 ```
+
+The pre-v2.4 escalation pattern of "ruff/mypy red but all pre-existing on main" no longer happens — the differential gate sees pre-existing baseline as zero-delta and lets it pass. If you find yourself escalating because the gate fails entirely on baseline noise, the baseline cache or rename map is wrong: re-run capture-baseline and bounce with details.
 
 ## Reminders
 

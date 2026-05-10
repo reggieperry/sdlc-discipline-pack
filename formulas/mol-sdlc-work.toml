@@ -289,7 +289,7 @@ so; adapt the setup command accordingly.
 **5. Record the step:**
 
 ```bash
-bd update {{story_id}} --set-metadata current_step="implement"
+bd update {{story_id}} --set-metadata current_step="capture-baseline"
 ```
 
 **Exit criteria:** Current working directory is inside the bead-scoped
@@ -300,9 +300,95 @@ clean. Dependencies installed. The bead has `metadata.work_dir` and
 
 
 [[steps]]
+id = "capture-baseline"
+title = "Snapshot the target branch's static-analysis baseline"
+needs = ["workspace-setup"]
+description = """
+Capture ruff, mypy, suppression, and pytest-weakening counts for the
+merge-base SHA against `metadata.target`. The tester reads this baseline
+later and the gate fails only on findings the worker's branch
+*introduces*, not on pre-existing baseline noise. This is what makes the
+chain shippable on rigs whose `origin/$TARGET` has accumulated a static-
+analysis backlog: the worker is held to anti-weakening discipline (no
+new errors, no new suppressions, no removed assertions), not to a
+zero-error standard the rig itself doesn't currently meet.
+
+The baseline is keyed by SHA and cached in `$RIG_ROOT/.gc/cache/baselines/`,
+so concurrent stories sharing the same merge-base share the cache.
+
+```bash
+TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"')
+BASELINE_SHA=$(git merge-base HEAD "origin/$TARGET")
+RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
+CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
+```
+
+If the cache already exists for this SHA, skip recapture (idempotent
+across resumes and across concurrent stories on the same target SHA):
+
+```bash
+if [ -f "$CACHE_DIR/sha.txt" ]; then
+    bd update {{story_id}} \\
+      --set-metadata gate.baseline_sha="$BASELINE_SHA" \\
+      --set-metadata gate.baseline_cached="true" \\
+      --set-metadata current_step="implement"
+    echo "baseline cache hit: $CACHE_DIR"
+    # exit step early — proceed to implement
+fi
+```
+
+Otherwise, capture in a scratch worktree at the baseline SHA so the
+capture sees the *target's* static-analysis state, not the branch's
+work-in-progress:
+
+```bash
+mkdir -p "$CACHE_DIR"
+SCRATCH=$(mktemp -d)
+git worktree add --detach "$SCRATCH" "$BASELINE_SHA" >/dev/null
+(
+    cd "$SCRATCH"
+    [ -f pyproject.toml ] && uv sync --group dev > /dev/null 2>&1
+    python3 .claude/sdlc-discipline/sdlc-gate.py \\
+        baseline --sha "$BASELINE_SHA" --out "$CACHE_DIR"
+)
+git worktree remove --force "$SCRATCH" >/dev/null
+```
+
+Note: `.claude/sdlc-discipline/sdlc-gate.py` is materialized into every
+worktree by the workspace-setup step's overlay propagation (formula step
+`workspace-setup`, sub-step 2a). The scratch worktree at the baseline
+SHA also receives this propagation when its parent `.claude/` is
+populated; if the rig's baseline SHA pre-dates the overlay, the script
+won't be there. Recover by copying it explicitly from this worktree:
+
+```bash
+if [ ! -f "$SCRATCH/.claude/sdlc-discipline/sdlc-gate.py" ]; then
+    mkdir -p "$SCRATCH/.claude/sdlc-discipline"
+    cp .claude/sdlc-discipline/sdlc-gate.py \\
+       "$SCRATCH/.claude/sdlc-discipline/sdlc-gate.py"
+fi
+```
+
+Record the SHA on the bead so the tester knows which cache entry to
+read:
+
+```bash
+bd update {{story_id}} \\
+  --set-metadata gate.baseline_sha="$BASELINE_SHA" \\
+  --set-metadata gate.baseline_cached="false" \\
+  --set-metadata current_step="implement"
+```
+
+**Exit criteria:** `$CACHE_DIR/{ruff,mypy,suppressions,pytest-weakening}.json`
+and `sha.txt` exist. The bead has `gate.baseline_sha` set. Scratch
+worktree removed. Current step is `implement`.
+"""
+
+
+[[steps]]
 id = "implement"
 title = "Walk the plan's steps in order"
-needs = ["workspace-setup"]
+needs = ["capture-baseline"]
 description = """
 Execute the plan's steps in order. Each step is shaped per the plan's
 marker — `red-green-refactor` or `pin-after-implementation`.
@@ -404,23 +490,38 @@ You do NOT run the full pytest suite here — that is the tester pool's
 job. The tester runs in a fresh-context session with its own LLM
 budget, which is the right place to investigate test failures.
 
-## Gate 1 — Lint
+## Gate 1 — Differential static-analysis (lint, types, anti-weakening)
+
+The pre-handoff gate is the same differential check the tester runs in
+fresh-context. Reads the baseline captured in `capture-baseline`,
+compares the branch's current state, fails on **introduced** ruff or
+mypy errors, **introduced** suppression directives, **introduced**
+pytest skip/xfail markers, or **lost** assertion counts. Pre-existing
+baseline noise is tolerated; weakening the branch to mask new failures
+is not.
 
 ```bash
-uv run ruff check .
+BASELINE_SHA=$(bd show {{story_id}} --json | jq -r '.[0].metadata."gate.baseline_sha"')
+RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
+CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
+
+python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR"
+GATE_RC=$?
 ```
 
-Must exit 0. Fix any violations as `chore(lint): <short reason>`.
+Verdict semantics:
 
-## Gate 2 — Types
+- **`pass` (exit 0, blocks empty):** all gates clean; proceed.
+- **`advisory` (exit 0, blocks empty, advisories present):** soft signals
+  for reviewer attention (cross-file relocations whose global net is
+  non-positive, test-file deletions). Note them in the plan if the story
+  did not anticipate them; proceed.
+- **`fail` (exit 1):** at least one block. Each block names a check
+  (`A.ruff`, `A.mypy`, `B`, `D.skips`, `D.asserts`) and the offending
+  files/codes. Fix as `chore(lint):` / `chore(types):` / `chore(test):`
+  per category; do not weaken to silence; rerun the gate.
 
-```bash
-uv run mypy .
-```
-
-Must exit 0. Fix any violations as `chore(types): <short reason>`.
-
-## Gate 3 — Plan coverage
+## Gate 2 — Plan coverage
 
 Read `plans/{{story_id}}.md` again. For each `- [ ]` line in the
 Acceptance criteria section, name the test that pins it. If any
@@ -435,7 +536,7 @@ grep '^- \\[ \\]' plans/{{story_id}}.md
 For each criterion the grep prints, confirm a test exists. The
 relationship is one criterion → at least one named test.
 
-## Gate 4 — Sensitive-files declaration
+## Gate 3 — Sensitive-files declaration
 
 ```bash
 PLANNED=$(awk '/## Sensitive files/{flag=1; next} /^## /{flag=0} flag' plans/{{story_id}}.md)
@@ -454,9 +555,11 @@ the plan to declare the file and commit the amendment as
 bd update {{story_id}} --set-metadata current_step="submit-and-exit"
 ```
 
-**Exit criteria:** All four gates pass. ruff and mypy clean. Every
-acceptance criterion has a pinning test. No undeclared sensitive-file
-edits. The bead's `current_step` is `submit-and-exit`.
+**Exit criteria:** All three gates pass. Differential gate green
+(no introduced ruff/mypy errors, no introduced suppressions, no new
+skip markers, no lost asserts). Every acceptance criterion has a
+pinning test. No undeclared sensitive-file edits. The bead's
+`current_step` is `submit-and-exit`.
 """
 
 
