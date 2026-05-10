@@ -3,7 +3,7 @@ paths:
   - "**/*.py"
 ---
 
-> Full reasoning, citations (Evans 2003), and worked examples: `docs/ddd-guide.md`.
+> Full reasoning, citations (Evans 2003), and worked examples: `.claude/sdlc-discipline/guides/ddd-guide.md`.
 > Elder examples in this rule are illustrative — they show what DDD looks like
 > in a non-trivial codebase. The principle applies across projects.
 

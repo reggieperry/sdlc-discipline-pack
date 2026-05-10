@@ -3,7 +3,7 @@ paths:
   - "**/*.py"
 ---
 
-> Full reasoning, citations (Liskov 1973, Parnas, ML/OCaml/Scala), and worked examples: `docs/modularity-guide.md`.
+> Full reasoning, citations (Liskov 1973, Parnas, ML/OCaml/Scala), and worked examples: `.claude/sdlc-discipline/guides/modularity-guide.md`.
 > Elder examples in this rule are illustrative — they show what level ownership
 > looks like in a non-trivial codebase. The principle applies across projects.
 
