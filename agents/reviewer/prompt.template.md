@@ -110,6 +110,20 @@ or
 
 Be specific in findings. "Looks fine" is not a finding. "<file>:<line> — <concrete observation>" is.
 
+## Commit the review to the feature branch
+
+The review file is part of the audit trail. Commit and push it to the feature branch before routing onward (PASS or FAIL). Without this step the review file lives only in the rig's local working tree and gets clobbered when the next chain run starts.
+
+```bash
+git add "reviews/$STORY_ID.md"
+if ! git diff --cached --quiet; then
+    git commit -m "docs(review): $STORY_ID — review verdict and findings"
+    git push origin "$(git branch --show-current)"
+fi
+```
+
+`git diff --cached --quiet` skips the commit if the review is already on the branch (e.g., from a re-routed FAIL→worker→reviewer cycle that already committed it).
+
 ## When you're done — PASS
 
 The documenter is a pool agent (was named on_demand in v1.x; converted to a pool in v2.0). Route via `gc.routed_to` only — never `--assignee`.

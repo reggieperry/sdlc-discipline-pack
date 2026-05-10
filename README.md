@@ -268,13 +268,24 @@ Opens `$EDITOR` on a prefilled markdown template with the entry-point format (Ou
 
 ## Running the chain
 
-After authoring a story, kick off the SDLC pipeline:
+After authoring a story, kick off the SDLC pipeline. Two paths.
+
+**Recommended: the kickoff script.** Runs four `bd` commands locally and exits in under a second.
+
+```bash
+cd <rig>
+bash scripts/sdlc-kickoff.sh <bead_id>
+```
+
+The script sets `gc.routed_to=<rig>/sdlc-discipline.worker` on the story bead, stamps `sdlc_run_started`, leaves a kickoff note, and exits. The supervisor's pool reconciler spawns a fresh worker on its next tick and the chain proceeds.
+
+**Alternative: the formula-driven kickoff.** Spawns a fresh Claude Code session that runs the same four `bd` commands inside `mol-sdlc.toml`'s kickoff step. Higher latency (~60–120s) and material RAM pressure under concurrent loads (each kickoff is ~350 MB), but creates a wisp molecule bead in the bead store for graph-tracking purposes.
 
 ```bash
 gc sling <rig>/<provider> mol-sdlc --formula --var story_id=<bead_id>
 ```
 
-The kickoff step routes the bead to the worker pool via `gc.routed_to`. The worker's pool reconciler spawns a fresh worker, which walks the six-step `mol-sdlc-work` formula (load-context, plan, workspace-setup, implement, self-audit, submit-and-exit) and routes the bead to the tester pool. Each subsequent pool runs a single-conversation handoff and routes onward via `gc.routed_to` — never `--assignee`.
+Once the bead is routed, both paths converge: the worker's pool reconciler spawns a fresh worker, which walks the six-step `mol-sdlc-work` formula (load-context, plan, workspace-setup, implement, self-audit, submit-and-exit) and routes the bead to the tester pool. Each subsequent pool runs a single-conversation handoff and routes onward via `gc.routed_to` — never `--assignee`.
 
 ## Watching the chain
 
