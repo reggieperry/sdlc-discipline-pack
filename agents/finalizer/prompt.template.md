@@ -33,10 +33,32 @@ bd update $STORY_ID \
 ## Get to the documenter's branch
 
 ```bash
-git fetch origin
 BRANCH=$(bd show $STORY_ID --json | jq -r '.[0].metadata.branch')
 TARGET=$(bd show $STORY_ID --json | jq -r '.[0].metadata.target // "main"')
+```
 
+### No-remote graceful close
+
+**Detect the no-remote case first.** Some rigs intentionally have no `origin` remote (local-only projects, gh-stats-style validation rigs, etc.). The worker and documenter handle this by recording `worker.push_skipped: no_remote_configured` and `documenter.push_skipped: no_remote_configured`; the finalizer must do the same. When there is no `origin`, `git fetch`, `git rebase origin/...`, `git push`, and `gh pr` all fail. The deterministic close-out is `final_state=branch_ready_no_pr`.
+
+```bash
+if ! git remote get-url origin >/dev/null 2>&1; then
+    bd update $STORY_ID \
+      --set-metadata finalizer.no_remote_configured="true" \
+      --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+      --set-metadata final_state="branch_ready_no_pr"
+    bd close $STORY_ID --reason "shipped to local branch $BRANCH; rig has no origin remote (no_remote_configured)"
+    gc runtime drain-ack
+    exit
+fi
+```
+
+This block is unconditional: when origin is missing, close as `branch_ready_no_pr` and exit. No PR, no rebase, no human prompt — the rig declares its intent by not having a remote.
+
+### Remote present — fetch and check out
+
+```bash
+git fetch origin
 if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
     git checkout --track -B "$BRANCH" "origin/$BRANCH"
 else
