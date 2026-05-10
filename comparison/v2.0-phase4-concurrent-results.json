@@ -1,0 +1,76 @@
+{
+  "phase": "Phase 4 — concurrent multi-story test",
+  "pack_version": "v2.0.0",
+  "pack_install": "github.com:reggieperry/sdlc-discipline-pack v2.0.0 (locked at f6f8686)",
+  "stories_filed": 10,
+  "stories_closed": 10,
+  "stories_review_pass": 10,
+  "stories_tests_green": 10,
+  "stories_blockers": 0,
+  "batch": {
+    "sling_started_at": "2026-05-09T18:11:04-07:00",
+    "all_closed_at":   "2026-05-09T20:38:46-07:00",
+    "wall_clock_seconds": 8862,
+    "wall_clock_pretty":  "2h 27m 42s"
+  },
+  "stories": [
+    { "id": "cs-ka97", "rig": "csv2json", "story": "--skip N",          "started": "2026-05-09T18:36:18-07:00", "closed": "2026-05-09T19:54:20-07:00", "wall_seconds": 4682, "wall_pretty": "1h 18m 02s", "final_state": "pr_open_for_human", "pr": 20 },
+    { "id": "cs-r857", "rig": "csv2json", "story": "--select COL,COL", "started": "2026-05-09T18:35:58-07:00", "closed": "2026-05-09T19:43:20-07:00", "wall_seconds": 4042, "wall_pretty": "1h 07m 22s", "final_state": "pr_open_for_human", "pr": 17 },
+    { "id": "cs-z48t", "rig": "csv2json", "story": "--ndjson",          "started": "2026-05-09T18:15:47-07:00", "closed": "2026-05-09T19:53:42-07:00", "wall_seconds": 5875, "wall_pretty": "1h 37m 55s", "final_state": "pr_open_for_human", "pr": 19 },
+    { "id": "cs-rmsf", "rig": "csv2json", "story": "--null-strings",   "started": "2026-05-09T18:15:47-07:00", "closed": "2026-05-09T19:45:23-07:00", "wall_seconds": 5376, "wall_pretty": "1h 29m 36s", "final_state": "pr_open_for_human", "pr": 18 },
+    { "id": "cs-fi87", "rig": "csv2json", "story": "stats subcommand",  "started": "2026-05-09T18:13:03-07:00", "closed": "2026-05-09T19:29:48-07:00", "wall_seconds": 4605, "wall_pretty": "1h 16m 45s", "final_state": "pr_open_for_human", "pr": 16 },
+    { "id": "gs-718c", "rig": "gh-stats", "story": "time-to-merge",     "started": "2026-05-09T18:35:48-07:00", "closed": "2026-05-09T20:38:41-07:00", "wall_seconds": 7373, "wall_pretty": "2h 02m 53s", "final_state": "branch_ready_no_pr", "note": "stuck on no-remote finalizer prompt for ~38 min; manual nudge required" },
+    { "id": "gs-muh9", "rig": "gh-stats", "story": "issue-counts",      "started": "2026-05-09T18:23:08-07:00", "closed": "2026-05-09T20:38:12-07:00", "wall_seconds": 8104, "wall_pretty": "2h 15m 04s", "final_state": "branch_ready_no_pr", "note": "stuck on no-remote finalizer prompt for ~50 min; manual nudge required" },
+    { "id": "gs-t50s", "rig": "gh-stats", "story": "star-history",      "started": "2026-05-09T18:16:05-07:00", "closed": "2026-05-09T19:40:09-07:00", "wall_seconds": 5044, "wall_pretty": "1h 24m 04s", "final_state": "branch_ready_no_pr" },
+    { "id": "gs-j3pt", "rig": "gh-stats", "story": "top-contributors",  "started": "2026-05-09T18:15:55-07:00", "closed": "2026-05-09T19:36:42-07:00", "wall_seconds": 4847, "wall_pretty": "1h 20m 47s", "final_state": "branch_ready_no_pr" },
+    { "id": "gs-tzfy", "rig": "gh-stats", "story": "repo-info",         "started": "2026-05-09T18:15:55-07:00", "closed": "2026-05-09T19:28:23-07:00", "wall_seconds": 4348, "wall_pretty": "1h 12m 28s", "final_state": "branch_ready_no_pr" }
+  ],
+  "per_story_stats": {
+    "mean_wall_seconds_8_clean": 4852,
+    "mean_wall_pretty_8_clean": "1h 20m 52s",
+    "mean_wall_seconds_all_10": 5429,
+    "mean_wall_pretty_all_10": "1h 30m 30s",
+    "fastest": { "id": "cs-r857", "wall": "1h 07m 22s" },
+    "slowest_clean": { "id": "cs-z48t", "wall": "1h 37m 55s" }
+  },
+  "comparison_to_v1_3_hypothetical_10_story": {
+    "v1_3_assumption": "named sessions serialize within a rig, but rigs are independent. Best-case parallel-across-rigs: max(5 × 25m, 5 × 25m) = 2h 05m. Sequential: 4h 10m.",
+    "v2_0_actual_phase4": "2h 27m 42s",
+    "v2_0_excluding_no_remote_stall": "estimated ~1h 50m if gs-718c/gs-muh9 had taken ~1h 20m like the other gh-stats stories",
+    "verdict": "Concurrency win is real but modest — v2.0 batch achieves ~1.13× speedup over v1.3's best-case parallel-across-rigs scenario, after excluding the no-remote bug stall. Per-story v2.0 is 3.2× slower than v1.3 single-story, so the win comes entirely from concurrency, eaten partially by per-story discipline overhead."
+  },
+  "csv2json_pr_state": {
+    "all_5_open_for_human": true,
+    "all_mergeable": "MERGEABLE (no rebase conflicts despite all 5 touching __main__.py)",
+    "auto_merge_fired": false,
+    "auto_merge_failure_signal": "pr_glance_failed=true on every story",
+    "likely_cause": "R4 (≤ 200 LOC across ≤ 10 files) probably failed because the heavy discipline produced 12-16 small commits per story plus separate test/feat/chore/docs commits; total LOC across the diff likely > 200 for at least some stories. Per-pack rubric did not capture pr_glance_failure_reason metadata, so root cause is inferred."
+  },
+  "system_load_during_run": {
+    "peak_load_average_1min": 20.08,
+    "peak_concurrent_claude_sessions": 10,
+    "peak_idle_cpu_percent": 0,
+    "peak_free_memory_mib": 350,
+    "dolt_cpu_sustained": "70-100% on one core throughout the run",
+    "verdict": "Workstation tolerated peak load. Laptop with 16 GB RAM would have swapped during the kickoff pulse."
+  },
+  "bugs_surfaced": [
+    {
+      "id": "v2.0-bug-1",
+      "severity": "blocker for shipping v2.0",
+      "summary": "Finalizer prompt assumes origin remote exists; gh-stats rigs without a remote get the finalizer stuck on an interactive 'how should I close out?' prompt.",
+      "evidence": "Both gs-718c and gs-muh9 stalled at 'in_progress:finalizer' for 38–50 minutes; gc session peek showed the agent waiting on a 4-option choice prompt; manual gc session nudge required to unstick.",
+      "root_cause": "agents/finalizer/prompt.template.md's 'Refresh against origin/main' section runs `git fetch origin $TARGET` and `git rebase origin/$TARGET` unconditionally. When `git remote` lists no `origin`, the LLM correctly identifies the situation but does not have prompt guidance for the no-remote graceful-close path — worker and documenter both have explicit `push_skipped: no_remote_configured` paths, the finalizer does not.",
+      "fix": "Add a no-remote branch to the finalizer prompt: detect `git remote get-url origin` failing, set `final_state=branch_ready_no_pr`, close the bead, exit. Mirror the pattern already in agents/documenter/prompt.template.md.",
+      "tracked_under": "v2.0 finalize work; must ship before v2.0 release"
+    },
+    {
+      "id": "v2.0-bug-2",
+      "severity": "low — cosmetic / observability",
+      "summary": "pr_glance_failure_reason metadata is null even when pr_glance_failed=true.",
+      "evidence": "All 5 csv2json stories have pr_glance_failed=true and pr_glance_failure_reason=null.",
+      "root_cause": "scripts/sdlc-glance-rubric.sh prints to stdout and the documenter pipes that to a comment but does not extract the failure summary into bead metadata.",
+      "fix": "Update finalizer prompt or the rubric script to write the failure summary to metadata.pr_glance_failure_reason."
+    }
+  ]
+}

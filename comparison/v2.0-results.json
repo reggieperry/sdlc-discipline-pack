@@ -1,0 +1,79 @@
+{
+  "pack_version": "v2.0.0",
+  "pack_repo": "github.com/reggieperry/sdlc-discipline-pack",
+  "pack_install_path": "remote (gc import install from git@github.com:reggieperry/sdlc-discipline-pack.git, locked at f6f8686)",
+  "architecture": {
+    "agents": ["worker", "tester", "reviewer", "documenter", "finalizer"],
+    "agent_shape": "all five pools, zero named sessions",
+    "concurrency": "multiple chains in flight simultaneously per rig (validated in Phase 4)",
+    "max_per_rig": { "worker": 5, "tester": 3, "reviewer": 3, "documenter": 2, "finalizer": 2, "total": 15 }
+  },
+  "stories": [
+    {
+      "story_id": "gs-uud",
+      "rig": "gh-stats",
+      "title": "gh-stats: list-prs --repo OWNER/REPO with json and table output",
+      "compares_to_v1_3_story": "gs-id4 (same body, replayed verbatim except for the v2.0-specific Notes section)",
+      "branch": "feature/gs-uud",
+      "pr_number": null,
+      "note_no_pr": "gh-stats has no GitHub remote; chain landed locally on the branch (final_state=branch_ready_no_pr)",
+      "kickoff_at": "2026-05-09T16:57:24-07:00",
+      "closed_at": "2026-05-09T17:43:43-07:00",
+      "wall_clock_seconds": 2779,
+      "wall_clock_pretty": "46m 19s",
+      "phases": {
+        "worker":     { "session_id": "bl-ddzja", "started_at": "2026-05-09T16:59:12-07:00", "completed_at": "2026-05-09T17:21:29-07:00", "duration_seconds": 1337, "covers": "load-context + plan + workspace-setup + implement + self-audit + submit" },
+        "tester":     { "session_id": "bl-d5u9m", "started_at": "2026-05-09T17:23:07-07:00", "completed_at": "2026-05-09T17:24:33-07:00", "duration_seconds": 86, "covers": "pytest + ruff + mypy" },
+        "reviewer":   { "session_id": "bl-d5u9m", "started_at": "2026-05-09T17:27:15-07:00", "completed_at": "2026-05-09T17:32:56-07:00", "duration_seconds": 341, "covers": "plan-coverage audit + rule self-audits", "note": "session_id matches tester — pool-instance reuse on the second handoff; benign" },
+        "documenter": { "session_id": "bl-s6rfb", "started_at": "2026-05-09T17:35:13-07:00", "completed_at": "2026-05-09T17:39:04-07:00", "duration_seconds": 231, "covers": "feature doc + commit + push" },
+        "finalizer":  { "session_id": "bl-abgnw", "started_at": "2026-05-09T17:42:50-07:00", "completed_at": "2026-05-09T17:43:41-07:00", "duration_seconds": 51, "covers": "rebase + close (no PR path — gh-stats has no remote)" }
+      },
+      "inter_phase_gaps_seconds": {
+        "kickoff_to_worker": 108,
+        "worker_to_tester": 98,
+        "tester_to_reviewer": 162,
+        "reviewer_to_documenter": 137,
+        "documenter_to_finalizer": 226
+      },
+      "outcomes": {
+        "review_verdict": "pass",
+        "test_status": "green",
+        "test_summary": "15 passed in 0.45s",
+        "final_state": "branch_ready_no_pr",
+        "feature_doc": "docs/features/feature-gs-uud-gh-stats-list-prs-repo-owner-repo-with-json-and-table-output.md",
+        "plan_file": "plans/gs-uud.md",
+        "review_file": "reviews/gs-uud.md",
+        "all_five_pools_traversed": true,
+        "routing_convention_held": true,
+        "no_chain_stalls": true
+      }
+    }
+  ],
+  "v1_3_vs_v2_0_single_story": {
+    "comparison_caveat": "v2.0 story (gs-uud) was filed on a fresh bd init; v1.3 story (gs-id4) was filed on a populated bead store. Workspace-state differences are minor but not zero.",
+    "wall_clock_seconds": { "v1_3": 1536, "v2_0": 2779, "delta": "+1243s (+81%)" },
+    "wall_clock_pretty":  { "v1_3": "25m 36s", "v2_0": "46m 19s" },
+    "phase_work_seconds": { "v1_3": 1053, "v2_0": 2046, "delta": "+993s (+94%)" },
+    "inter_phase_gap_seconds": { "v1_3": 483, "v2_0": 731, "delta": "+248s (+51%)" },
+    "decomposition_notes": [
+      "Worker phase in v2.0 (22m 17s) covers plan + workspace + implement + self-audit; v1.3's planner + implementor sum to 10m 32s (632s). v2.0 worker is ~12 min longer. self-audit (lint+types+rule audits) is new work; workspace-setup and per-step metadata writes also live inside the single session now, where v1.3 spread them across handoffs.",
+      "Tester phase shrank from 21s (v1.3) to 86s (v2.0) — but v1.3's tester only ran pytest, while v2.0's tester runs pytest + ruff + mypy in a fresh session that has to load context.",
+      "Reviewer phase grew from 3m 24s (v1.3) to 5m 41s (v2.0). Reviewer scope is similar; the longer time may be from richer rule self-audits the v2.0 prompt encourages, or from fresh-context loading.",
+      "Documenter phase grew from 3m 16s (v1.3) to 3m 51s (v2.0) — small delta, expected.",
+      "Finalizer phase is 51s (new in v2.0; no v1.3 equivalent because v1.3 documenter handled merge gate inline).",
+      "Inter-phase gaps grew because v2.0 has five handoffs (worker→tester→reviewer→documenter→finalizer) vs v1.3's four (planner→implementor→tester→reviewer→documenter). Per-handoff gap is roughly comparable; total gap time grows with one extra handoff."
+    ],
+    "concurrency_capability": {
+      "v1_3": "single chain at a time per rig (named sessions serialize)",
+      "v2_0": "multiple chains in flight per rig, bounded by host CPU/RAM and per-account API rate limits"
+    },
+    "ship_signal": "On single-story wall clock alone, v1.3 is faster. The v2.0 win shows up only under concurrency — which Phase 4's 10-story test will measure. Single-story slowdown is the cost of architectural separation (more handoffs, more pool spawn latency, more fresh-context loading) that buys parallelism."
+  },
+  "supervisor_overhead_observed": {
+    "dolt_cpu_during_run": "~70-100% sustained on one core",
+    "dolt_log_warning": "every reconciler poll emits 'error running query: nothing to commit' — bd CLI wraps reads in write-capable transactions",
+    "maintenance_orders_active": ["beads-health (30s)", "gate-sweep (30s)", "order-tracking-sweep (1m)", "cross-rig-deps (5m)", "orphan-sweep (5m)", "spawn-storm-detect (5m)", "mol-dog-jsonl (15m)", "mol-dog-reaper (30m)", "prune-branches (6h)"],
+    "impact_on_chain": "none observed; chain progressed normally despite Dolt at 70-100% CPU",
+    "tracked_under": "fit-and-finish todo (deep dive deferred until v2.0 ships)"
+  }
+}

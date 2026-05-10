@@ -12,11 +12,12 @@ Direct-comparison data for evaluating pack architecture across versions. Each ve
 
 - `v1.3-baseline.json` — per-phase wall-clock and session metrics for the two completed v1.3 chain runs
 - `v2.0a-stall-record.json` — record of the gs-hdpw stall at documenter (single data point, partial chain)
+- `v2.0-results.json` — Phase 3 single-pilot replay (gs-uud, 46m end-to-end on a fresh remote-installed pack)
+- `v2.0-phase4-concurrent-results.json` — Phase 4 ten-story concurrent batch (5 csv2json + 5 gh-stats, 2h 27m wall clock)
+- `v1.3-vs-v2.0.md` — side-by-side comparison and ship decision (recommendation: ship v2.0 as v2.0.1)
 - `stories/csv2json-cs-4b2q.md` — `--tab` flag story; canonical csv2json replay
 - `stories/gh-stats-gs-id4.md` — `list-prs` story; canonical gh-stats replay
-- `stories/gh-stats-gs-hdpw.md` — `time-to-merge` histogram story; the stall victim, replayable as a v2.0 validation
-- `v2.0-results.json` — populated after Phase 4 of the v2.0 build plan (single-pilot replay + 10-story concurrent test)
-- `v1.3-vs-v2.0.md` — populated after Phase 6, side-by-side comparison and ship/revert decision
+- `stories/gh-stats-gs-hdpw.md` — `time-to-merge` histogram story; the v2.0a stall victim, replayed cleanly as gs-718c in Phase 4 against v2.0
 
 ## Replay convention
 
