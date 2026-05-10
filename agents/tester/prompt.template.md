@@ -33,18 +33,37 @@ bd update $STORY_ID \
 ## Get to the worker's branch
 
 ```bash
-git fetch origin
 BRANCH=$(bd show $STORY_ID --json | jq -r '.[0].metadata.branch')
 TARGET=$(bd show $STORY_ID --json | jq -r '.[0].metadata.target // "main"')
+```
 
-if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-    git checkout --track -B "$BRANCH" "origin/$BRANCH"
+### No-remote case: check out from shared local refs
+
+If the rig has no `origin`, the worker's branch lives in the rig's local refs (git worktrees share the `.git` directory). Check it out directly without a fetch:
+
+```bash
+if ! git remote get-url origin >/dev/null 2>&1; then
+    if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH"
+        bd update $STORY_ID --set-metadata tester.no_remote_configured="true"
+    else
+        bd update $STORY_ID --set-metadata test_status="branch_missing" \
+          --set-metadata tester.no_remote_configured="true"
+        bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
+        gc runtime drain-ack
+        exit
+    fi
 else
-    echo "tester: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
-    bd update $STORY_ID --set-metadata test_status="branch_missing"
-    bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
-    gc runtime drain-ack
-    exit
+    git fetch origin
+    if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+        git checkout --track -B "$BRANCH" "origin/$BRANCH"
+    else
+        echo "tester: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
+        bd update $STORY_ID --set-metadata test_status="branch_missing"
+        bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
+        gc runtime drain-ack
+        exit
+    fi
 fi
 ```
 

@@ -472,13 +472,19 @@ fi
 the branch (e.g., from a resumed worker session that already committed
 it).
 
-**3. Push the branch:**
+**3. Push the branch (or skip gracefully on no-remote rigs):**
 
 ```bash
-git push -u origin "$(git branch --show-current)"
+if git remote get-url origin >/dev/null 2>&1; then
+    git push -u origin "$(git branch --show-current)"
+else
+    bd update {{story_id}} --set-metadata worker.push_skipped="no_remote_configured"
+fi
 ```
 
-If `SDLC_OPEN_PR_DEFAULT=true` for this rig, also open the PR:
+When the rig has no `origin` remote (local-only project, validation rig, etc.), the branch stays in the rig's local refs. The tester, reviewer, documenter, and finalizer all detect the same condition and use shared local refs to access the branch. The chain proceeds without a remote.
+
+If `SDLC_OPEN_PR_DEFAULT=true` for this rig, also open the PR (only meaningful when origin exists):
 
 ```bash
 if [ "${SDLC_OPEN_PR_DEFAULT:-false}" = "true" ]; then

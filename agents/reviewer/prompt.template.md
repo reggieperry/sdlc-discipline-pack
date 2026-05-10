@@ -31,20 +31,38 @@ bd update $STORY_ID \
 ## Get to the worker's branch
 
 ```bash
-git fetch origin
 BRANCH=$(bd show $STORY_ID --json | jq -r '.[0].metadata.branch')
 TARGET=$(bd show $STORY_ID --json | jq -r '.[0].metadata.target // "main"')
+```
 
-if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-    git checkout --track -B "$BRANCH" "origin/$BRANCH"
+### No-remote case: check out from shared local refs
+
+If the rig has no `origin`, the worker's branch lives in the rig's local refs. Check it out directly without a fetch — this is a routing path, not a code-quality failure, so do NOT set `review_verdict=fail`:
+
+```bash
+if ! git remote get-url origin >/dev/null 2>&1; then
+    if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH"
+        bd update $STORY_ID --set-metadata reviewer.no_remote_configured="true"
+    else
+        bd update $STORY_ID --set-metadata reviewer.no_remote_configured="true" \
+          --status=escalated --notes "review blocked: branch $BRANCH not present locally and no origin remote"
+        gc runtime drain-ack
+        exit
+    fi
 else
-    echo "reviewer: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
-    bd update $STORY_ID --set-metadata review_verdict=fail \
-      --set-metadata review_failure_summary="branch not pushed to origin"
-    # Worker is a pool agent — gc.routed_to ONLY, never --assignee.
-    bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
-    gc runtime drain-ack
-    exit
+    git fetch origin
+    if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+        git checkout --track -B "$BRANCH" "origin/$BRANCH"
+    else
+        echo "reviewer: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
+        bd update $STORY_ID --set-metadata review_verdict=fail \
+          --set-metadata review_failure_summary="branch not pushed to origin"
+        # Worker is a pool agent — gc.routed_to ONLY, never --assignee.
+        bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
+        gc runtime drain-ack
+        exit
+    fi
 fi
 ```
 

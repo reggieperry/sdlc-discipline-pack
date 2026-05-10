@@ -33,16 +33,34 @@ bd update $STORY_ID \
 ## Get to the reviewer's branch
 
 ```bash
-git fetch origin
 BRANCH=$(bd show $STORY_ID --json | jq -r '.[0].metadata.branch')
+```
 
-if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-    git checkout --track -B "$BRANCH" "origin/$BRANCH"
+### No-remote case: check out from shared local refs
+
+If the rig has no `origin`, the worker's branch lives in the rig's local refs. Check it out directly without a fetch:
+
+```bash
+if ! git remote get-url origin >/dev/null 2>&1; then
+    if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH"
+        bd update $STORY_ID --set-metadata documenter.no_remote_configured="true"
+    else
+        bd update $STORY_ID --set-metadata documenter.no_remote_configured="true" \
+          --status=escalated --notes "documentation blocked: branch $BRANCH not present locally and no origin remote"
+        gc runtime drain-ack
+        exit
+    fi
 else
-    echo "documenter: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
-    bd update $STORY_ID --status=escalated --notes "documentation blocked: branch not on remote"
-    gc runtime drain-ack
-    exit
+    git fetch origin
+    if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+        git checkout --track -B "$BRANCH" "origin/$BRANCH"
+    else
+        echo "documenter: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
+        bd update $STORY_ID --status=escalated --notes "documentation blocked: branch not on remote"
+        gc runtime drain-ack
+        exit
+    fi
 fi
 ```
 
@@ -130,7 +148,11 @@ FEATURE_DOC="docs/features/feature-${STORY_ID}-${SLUG}.md"
 git add docs/features/feature-*.md .claude/conditional_docs/feature-*.md 2>/dev/null || true
 if ! git diff --cached --quiet; then
     git commit -m "docs: feature-${STORY_ID} — $(bd show $STORY_ID --json | jq -r '.[0].title' | head -c 60)"
-    git push origin HEAD
+    if git remote get-url origin >/dev/null 2>&1; then
+        git push origin HEAD
+    else
+        bd update $STORY_ID --set-metadata documenter.push_skipped="no_remote_configured"
+    fi
 fi
 
 RIG="${GC_RIG:-csv2json}"
