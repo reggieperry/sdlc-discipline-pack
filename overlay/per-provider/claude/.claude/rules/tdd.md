@@ -4,7 +4,7 @@ paths:
   - "tests/**"
 ---
 
-> Full reasoning, citations (Freeman & Pryce 2009), and worked examples: `docs/goos-guide.md`.
+> Full reasoning, citations (Freeman & Pryce 2009), and worked examples: `.claude/sdlc-discipline/guides/goos-guide.md`.
 > Elder examples in this rule are illustrative — they show what TDD discipline
 > looks like in a non-trivial codebase. The principle applies across projects.
 

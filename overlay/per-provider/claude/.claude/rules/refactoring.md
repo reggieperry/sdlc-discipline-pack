@@ -3,7 +3,7 @@ paths:
   - "**/*.py"
 ---
 
-> Full reasoning, citations (Fowler 2018, 2nd ed), and the project mapping: `docs/refactoring-guide.md`.
+> Full reasoning, citations (Fowler 2018, 2nd ed), and the project mapping: `.claude/sdlc-discipline/guides/refactoring-guide.md`.
 
 # Refactoring
 
@@ -143,7 +143,7 @@ Each move has explicit mechanics in Fowler's catalog. Use the move name verbatim
 - **Preserve Whole Object** — pass an object instead of pulling fields out.
 - **Replace Constructor with Factory Function** — wrap construction in a factory when it's complex or polymorphic.
 
-For full mechanics on any move, consult `docs/refactoring-guide.md` or Fowler chapters 5–12 directly.
+For full mechanics on any move, consult `.claude/sdlc-discipline/guides/refactoring-guide.md` or Fowler chapters 5–12 directly.
 
 ## The compile-test-commit rhythm
 
