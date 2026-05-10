@@ -116,13 +116,31 @@ would touch. If none: state "None.">
 
 ## Steps
 
-Each step is a Red/Green/Refactor cycle. The build step executes them in order.
+Each step is one of two shapes. The build step executes them in order.
 
-1. **<Behavior name>** — Red: write `tests/test_<area>.py::test_<name>`
-   asserting the Then clause given the Given/When setup. Run; confirm
-   it fails for the right reason. Green: implement the minimum code to
-   pass. Refactor: clean up; rerun.
-2. **<Behavior name>** — Red: ... Green: ... Refactor: ...
+- **`red-green-refactor`** — for behaviors with branching, edge cases,
+  or any non-trivial correctness question. Write a failing test that
+  names the behavior; run it; confirm it fails for the right reason;
+  implement the minimum code to pass; refactor under the green tests.
+- **`pin-after-implementation`** — for plumbing, variants of a
+  behavior already implemented in a prior step (e.g., a second
+  `--format` choice given a primary one), or a behavior an existing
+  library validates for free (e.g., Click choice validation rejecting
+  unknown values). Implement, then write a regression-pinning test.
+  Mark the commit `test(<area>): pin <behavior>` rather than
+  shadow-implementing a Red.
+
+Pin-after is for cases where a watched-failing Red would be theatre
+rather than design pressure. Use red-green-refactor when the test
+genuinely informs the implementation; use pin-after when the
+implementation is mechanical and the test is the safety net.
+
+1. `[red-green-refactor]` **<Behavior name>** — Red: write
+   `tests/test_<area>.py::test_<name>` asserting the Then clause
+   given the Given/When setup. Green: implement the minimum code.
+   Refactor: clean up; rerun.
+2. `[pin-after-implementation]` **<Behavior name>** — Implement
+   (mechanical), then add `test(<area>): pin <behavior>`.
 3. ...
 ```
 
@@ -261,14 +279,13 @@ clean. Dependencies installed. The bead has `metadata.work_dir` and
 
 [[steps]]
 id = "implement"
-title = "Walk the plan's R/G/R cycles in order"
+title = "Walk the plan's steps in order"
 needs = ["workspace-setup"]
 description = """
-Execute the plan's steps in order. Each step is a Red/Green/Refactor
-cycle: write a failing test that names the behavior, implement the
-minimum code to pass, refactor under the green tests.
+Execute the plan's steps in order. Each step is shaped per the plan's
+marker — `red-green-refactor` or `pin-after-implementation`.
 
-For every cycle:
+For `red-green-refactor` steps:
 
 1. **Red.** Write the test named in the plan. Run `uv run pytest <path> -v`.
    Confirm it fails for the right reason. If it fails for a different
@@ -279,16 +296,34 @@ For every cycle:
    from the catalog (Extract Function, Rename, etc. — see `refactoring.md`
    when its glob fires). If you cannot name the move from the catalog,
    you are not refactoring; you are rewriting. Stop.
-4. **Commit.** A separate commit for each move; never bundle a feature
-   commit with a refactor commit. Two-Hats discipline:
-   - `feat(<area>): <behavior>` — a new behavior pinned by its test
-   - `test(<area>): <behavior>` — a test that pins existing behavior
-   - `refactor(<area>): <move-name from catalog>` — pure restructuring
-   - `chore(<area>): <housekeeping>` — lints, type-noqa, tooling fixes
 
-Per-cycle commits matter — the safety net of refactoring is the ability
-to revert a single move when something breaks downstream. Squashing is
-the documenter's call at merge time, not yours.
+For `pin-after-implementation` steps: implement first, then add the
+regression-pinning test. The test should still be behavior-named and
+fail-clean if the underlying implementation regresses.
+
+## Commits
+
+Atomic per behavior. The Two-Hats discipline binds at the **hat**
+boundary, not the artifact boundary — bundling a feature with its
+pinning test in one commit is fine; bundling a feature with an
+unrelated refactor is not. Use these prefixes:
+
+- `feat(<area>): <behavior>` — a new behavior plus its pinning
+  test(s) committed together as one atomic change. The diff includes
+  both the production code and the test that pins it.
+- `test(<area>): pin <behavior>` — a test added for a behavior
+  already implemented (pin-after-implementation steps), or a
+  characterization test pinning existing behavior before refactoring.
+- `refactor(<area>): <move-name from catalog>` — pure restructuring,
+  no behavior change. Always its own commit. Never bundled with `feat:`.
+- `chore(<area>): <housekeeping>` — lints, type-noqa, tooling fixes.
+  Always its own commit.
+
+The safety net of refactoring is the ability to revert one *behavior*
+or one *refactor* as a unit. Splitting feat from test buys nothing the
+diff doesn't already show; splitting feat from refactor buys real
+clarity when a downstream test breaks. Squashing is the documenter's
+call at merge time, not yours.
 
 ## Discipline rules
 
@@ -322,9 +357,11 @@ then proceed.
 bd update {{story_id}} --set-metadata current_step="self-audit"
 ```
 
-**Exit criteria:** Every R/G/R cycle from the plan has a feat/test
-commit pair (and possibly a refactor commit). The working tree is clean.
-The branch contains commits in plan order, not jumbled.
+**Exit criteria:** Every plan step has a corresponding atomic commit
+(`feat:` for red-green-refactor steps, `test: pin` for
+pin-after-implementation steps; refactor and chore commits separate
+where present). The working tree is clean. The branch contains
+commits in plan order, not jumbled.
 """
 
 
@@ -333,65 +370,61 @@ id = "self-audit"
 title = "Lint, type-check, and audit your work against the rule self-audits before handoff"
 needs = ["implement"]
 description = """
-This step is your last chance to catch issues before handoff to the
-tester pool. Run the fast checks (lint, types) inline, then walk the
-rule self-audits.
+A tight pre-handoff gate. Four checks, all pass-or-fix, none of them
+require walking long checklists. The discipline rules in
+`.claude/rules/` auto-load on file edits during the implement step;
+they fire when relevant and have already constrained the code that
+arrived here. This step does not re-walk those audits — it verifies
+that the deterministic gates (lint, types, plan coverage,
+sensitive-files) are clean.
 
 You do NOT run the full pytest suite here — that is the tester pool's
 job. The tester runs in a fresh-context session with its own LLM
-budget, which is the right place to investigate test failures cleanly.
-You run the cheap, instant checks (ruff, mypy) so you don't push code
-that is obviously broken on the surface.
+budget, which is the right place to investigate test failures.
 
-## Lint and type-check
+## Gate 1 — Lint
 
 ```bash
 uv run ruff check .
-RUFF_RC=$?
-
-uv run mypy .
-MYPY_RC=$?
 ```
 
-Both clean before proceeding. Fix any new violations as `chore(<area>):
-<short reason>` commits. If the rig uses different tooling, the rig's
-`CLAUDE.md` should say so; adapt accordingly.
+Must exit 0. Fix any violations as `chore(lint): <short reason>`.
 
-## Rule self-audits
+## Gate 2 — Types
 
-The rule files have explicit self-audit sections — they are binary
-checklists, no partial credit. Walk them.
+```bash
+uv run mypy .
+```
 
-The audits that matter at this stage:
+Must exit 0. Fix any violations as `chore(types): <short reason>`.
 
-- `python.md`'s self-review gate (9 items)
-- `tdd.md`'s self-audit (12 items, focused on test discipline)
-- `refactoring.md`'s self-audit (12 items, focused on Two Hats and
-  the catalog)
-- `modularity.md`'s self-audit (15 items, focused on level ownership
-  and connection-as-assumption)
-- `code-structure.md`'s testing principles section
-- `decoupling.md`'s self-audit if you touched anything under `.claude/`
+## Gate 3 — Plan coverage
 
-For each item: read it, check whether your work passes, fix what fails.
+Read `plans/{{story_id}}.md` again. For each `- [ ]` line in the
+Acceptance criteria section, name the test that pins it. If any
+criterion has no pinning test, write the test now and amend the
+implement step's commit sequence. Do not assume the tester will catch
+a missing-test gap.
 
-## Common issues to look for
+```bash
+grep '^- \\[ \\]' plans/{{story_id}}.md
+```
 
-- A function body over 25 lines that is doing two things — Extract Function.
-- An assertion without a domain-language diagnostic message —
-  `assert x > 0, f"expected positive value, got {x}"`.
-- A test name that describes a method rather than a behavior — rename.
-- A mock for something the SUT owns rather than a peer — refactor.
-- A `dict[str, Any]` return on a public surface — type it.
-- A `# noqa` without a comment naming why — add one or remove the noqa.
+For each criterion the grep prints, confirm a test exists. The
+relationship is one criterion → at least one named test.
 
-## Plan compliance
+## Gate 4 — Sensitive-files declaration
 
-Read your plan again. For each acceptance criterion: which test pins
-it? If any criterion has no pinning test, you are not done — write the
-test now (Red, then Green) and amend the implement step's commit
-sequence. Do not assume the tester will catch a missing-test gap; the
-tester runs your tests, it does not invent new ones.
+```bash
+PLANNED=$(awk '/## Sensitive files/{flag=1; next} /^## /{flag=0} flag' plans/{{story_id}}.md)
+TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"')
+CHANGED=$(git diff --name-only "origin/$TARGET")
+```
+
+If any path in `CHANGED` matches an entry in the rig's `CLAUDE.md`
+sensitive-files list and is not declared in `PLANNED`: STOP. Update
+the plan to declare the file and commit the amendment as
+`docs(plan): declare <path> as touched`, then re-run this step.
 
 ## Recording
 
@@ -399,10 +432,9 @@ tester runs your tests, it does not invent new ones.
 bd update {{story_id}} --set-metadata current_step="submit-and-exit"
 ```
 
-**Exit criteria:** ruff and mypy clean. Every audit item passes or has
-an explicit `# noqa` or in-line note explaining the deviation. Every
-acceptance criterion from the plan is pinned by a test. The bead's
-`current_step` is `submit-and-exit`.
+**Exit criteria:** All four gates pass. ruff and mypy clean. Every
+acceptance criterion has a pinning test. No undeclared sensitive-file
+edits. The bead's `current_step` is `submit-and-exit`.
 """
 
 
@@ -423,18 +455,22 @@ If anything outputs, you have uncommitted work. Either commit it under
 the right hat (feat/test/refactor/chore) or stash and investigate. Never
 push with untracked work left behind.
 
-**2. Sensitive-files gate:**
+**2. Commit the plan to the feature branch.**
+
+The plan at `plans/{{story_id}}.md` is the contract this story was
+implemented against. Make it part of the merged history so the audit
+trail survives the next worker rotation.
 
 ```bash
-PLANNED=$(awk '/## Sensitive files/{flag=1; next} /^## /{flag=0} flag' plans/{{story_id}}.md)
-CHANGED=$(git diff --name-only origin/$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"'))
+git add plans/{{story_id}}.md
+if ! git diff --cached --quiet; then
+    git commit -m "docs(plan): {{story_id}} — implementation plan"
+fi
 ```
 
-If any path in `CHANGED` matches an entry in the rig's CLAUDE.md
-sensitive-files list and is not declared in `PLANNED`, **STOP**. Update
-the plan to declare the file, commit the plan amendment as
-`docs(plan): declare <path> as touched`, and re-run this step. Do not
-push silently-changed sensitive files.
+`git diff --cached --quiet` skips the commit if the plan is already on
+the branch (e.g., from a resumed worker session that already committed
+it).
 
 **3. Push the branch:**
 

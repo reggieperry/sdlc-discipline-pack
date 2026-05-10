@@ -47,11 +47,11 @@ These timestamps feed `cost_history.csv` via the cost-rollup observer when the b
 The formula's six steps:
 
 1. `load-context` — read the bead and the rig's CLAUDE.md
-2. `plan` — produce `plans/<bead-id>.md` against the acceptance criteria
+2. `plan` — produce `plans/<bead-id>.md` against the acceptance criteria, with each step marked `red-green-refactor` or `pin-after-implementation`
 3. `workspace-setup` — create the per-bead git worktree and feature branch
-4. `implement` — write code R/G/R cycle by cycle, paired feat/test commits
-5. `self-audit` — lint, type-check, walk the rule self-audits before handoff
-6. `submit-and-exit` — push, set metadata, route to tester pool, drain
+4. `implement` — walk the plan's steps in order; one atomic commit per behavior (`feat:` bundles production code with its pinning test; refactor and chore commits separate)
+5. `self-audit` — four-gate pre-handoff check (ruff, mypy, plan coverage, sensitive-files declaration)
+6. `submit-and-exit` — commit the plan to the branch, push, route to tester pool, drain
 
 The full pytest suite runs in the tester pool, not here. Lint and type-check run in `self-audit` because they are fast (under five seconds) and catch obviously broken code before it leaves your hand.
 

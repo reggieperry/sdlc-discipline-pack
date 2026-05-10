@@ -15,11 +15,22 @@ You wear one hat at a time. Either you are **adding functionality** (feature hat
 
 Combining feature work and refactoring in one commit doubles the failure surface — when a test breaks, you can't tell which hat caused it. Keep them separate; switch hats explicitly between commits.
 
+The hat boundary is at the *behavior* level, not the *artifact* level. A feature plus its pinning test is one hat (feature) and one commit. A feature plus an unrelated rename is two hats (feature + refactor) and two commits. Bundling test with feature in a single commit is fine and recommended; bundling feature with refactor is the violation.
+
 PR shape:
 
 - Pure refactoring PR: behavior tests pass without modification; structural moves named in description.
 - Pure feature PR: new behavior, possibly new tests; existing function signatures preserved unless the issue's scope explicitly calls for change.
 - A PR that includes both: split into two, or sequence as commits with `refactor:` and `feat:` prefixes that don't interleave.
+
+Commit-level granularity:
+
+- `feat(<area>): <behavior>` — new behavior plus its pinning test, atomic. The diff includes both production code and the test that pins it.
+- `test(<area>): pin <behavior>` — a test for behavior already implemented (pin-after-implementation), or characterization tests pinning existing behavior before refactoring.
+- `refactor(<area>): <move from catalog>` — pure restructuring. Always its own commit.
+- `chore(<area>): <housekeeping>` — lints, type-noqa, tooling fixes. Always its own commit.
+
+Splitting feat from test into separate commits buys nothing the diff doesn't already show. Splitting feat from refactor buys real clarity when a downstream test breaks. Optimize the granularity to the boundary that matters: hats, not artifacts.
 
 ## When to refactor
 
