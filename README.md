@@ -46,19 +46,22 @@ sdlc-discipline/
 │   ├── story-new/run.sh               interactive story scaffold
 │   ├── cost-{story,session,stories}/  per-story / per-window / cross-story queries
 │   └── demo/run.sh                    four-pane tmux layout
+├── overlay/                           pack→agent file injection (Gas City overlay mechanism)
+│   └── per-provider/claude/.claude/
+│       ├── rules/*.md                 the 9 discipline rules (canonical home)
+│       └── settings.json              portable hooks + permissions
 ├── assets/                            opaque pack-owned files (NOT convention-discovered)
 │   ├── scripts/
 │   │   ├── worktree-setup.sh          pre_start hook for all five pools
 │   │   ├── sdlc-cost-rollup.sh        invoked by orders/sdlc-cost-rollup.toml
 │   │   └── sdlc-glance-rubric.sh      invoked by agents/finalizer/prompt.template.md
-│   ├── claude-defaults.tar.gz         drop-in .claude/ baseline for rigs without their own (rules + settings.json + conditional-docs starter)
 │   ├── docs/                          principal-engineer guides (DDD, GOOS, modularity, refactoring)
 │   └── comparison/                    v1.3-baseline + v2.0a-stall-record + chain-run results
 ├── pack.toml                          metadata, agent_defaults
 └── README.md
 ```
 
-This pack ships **no top-level `rules/` directory and no top-level `settings.json`**. Per Gas City pack v2 spec, those aren't pack content — `.claude/` is Claude Code's surface, not the pack's. For rigs that don't already have their own `.claude/rules/*.md` and `.claude/settings.json`, we ship a drop-in tarball at `assets/claude-defaults.tar.gz`. For rigs that already have their own (Elder, projects with established conventions), the pack's prompts reference rule names (`python.md`, `tdd.md`, etc.) which Claude Code resolves to whatever the rig has in `.claude/rules/`. See *Bootstrapping a rig's `.claude/`* below.
+The pack uses Gas City's `overlay/` mechanism to inject `.claude/rules/*.md` and `.claude/settings.json` into each chain agent's working directory at session-spawn time. The discipline rules live in **one place**: `overlay/per-provider/claude/.claude/rules/`. Rigs do not need to track their own copies; they consume the pack's rules via overlay. Rigs that *want* to override a specific rule can ship a same-named file in their own `.claude/rules/` — the workspace-setup propagation step preserves rig-tracked files (rig wins on filename collision). See *How rules reach the agent* below.
 
 The non-worker pools (tester, reviewer, documenter, finalizer) drive single-conversation workflows from their prompt templates. Only the worker walks a multi-step formula because its work has structurally distinct phases inside one session.
 
@@ -173,23 +176,19 @@ gc start
 
 Brings the city up under the machine-wide supervisor. After this point, beads routed to a pool's template name will spawn fresh sessions on demand and de-scale on idle.
 
-## Bootstrapping a rig's `.claude/`
+## How rules reach the agent
 
-Per the Gas City pack v2 spec, packs do not write to a rig's `.claude/`. Claude Code (the LLM provider) auto-loads `.claude/rules/*.md` and reads `.claude/settings.json` from whatever the rig has. This pack assumes the rig provides those files.
+The pack ships discipline rules and settings via Gas City's `overlay/` mechanism. At session-spawn time, the supervisor materializes `overlay/per-provider/<provider>/...` content into the agent's working directory, then starts the chain agent there. For Claude-Code agents this means `.claude/rules/*.md` and `.claude/settings.json` land at the agent's pre-spawn cwd, where Claude Code's auto-load picks them up.
 
-For rigs that already have established discipline (Elder, projects with their own `.claude/rules/` content), the pack's prompts reference rule names (`python.md`, `tdd.md`, `refactoring.md`, etc.) and Claude Code auto-loads whatever the rig has under those names. Nothing to do — the pack consumes the rig's existing rules.
+The worker formula's `workspace-setup` step then creates a per-bead worktree for the actual story work and `cd`s into it. That step propagates the overlay-materialized `.claude/` into the per-bead worktree, conditional on filename absence: only files the rig doesn't already track are populated from the overlay. A rig can override any specific rule by tracking a same-named file in its own `.claude/rules/` — the rig wins, the pack supplies the rest.
 
-For rigs that don't have any `.claude/rules/` content yet (a fresh repo, a pilot project, an OCaml project being onboarded), the pack ships a drop-in tarball at `assets/claude-defaults.tar.gz`:
+This means:
 
-```bash
-cd <rig>
-tar -xzf <pack-cache>/assets/claude-defaults.tar.gz
-git add .claude && git commit -m "chore: bootstrap .claude/ from sdlc-discipline-pack"
-```
+- **Fresh rigs** (a brand-new Python project, an OCaml project being onboarded, a pilot): no `.claude/rules/` content of their own. The pack supplies all 9 rules + `settings.json` via overlay. No tarball, no operator step, no manual extraction.
+- **Established rigs** that ship rig-specific rules (e.g., a rig with a project-specific `python.md` style guide): the rig's tracked file wins; the pack fills in the rest.
+- **Rule evolution**: the canonical rules live in *one* place — this pack's `overlay/per-provider/claude/.claude/rules/`. Update them here, ship a new pack version, and every rig picks up the change on its next chain run. Rigs don't carry their own copies that drift.
 
-The tarball lands `.claude/rules/{python,tdd,modularity,refactoring,code-structure,decoupling,testing,writing-style,ddd}.md`, `.claude/settings.json`, and a `.claude/conditional_docs/README.md` starter. After extraction, the rig owns the content — diverge or customize as needed.
-
-The source files for the tarball live under `assets/rules/`, `assets/settings.json`, and `assets/conditional_docs-README.md`. The build script at `assets/build-claude-defaults.sh` regenerates the tarball from those sources whenever the pack's discipline changes.
+The other agents (tester, reviewer, documenter, finalizer) work directly in their pool-instance work_dirs — the same place the overlay materializes — so they see the rules without needing the propagation step. Only the worker creates a separate per-bead worktree (for crash-recovery resumability) and therefore needs the propagation logic.
 
 ## Three operating modes
 
