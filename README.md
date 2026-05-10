@@ -190,6 +190,22 @@ This means:
 
 The other agents (tester, reviewer, documenter, finalizer) work directly in their pool-instance work_dirs — the same place the overlay materializes — so they see the rules without needing the propagation step. Only the worker creates a separate per-bead worktree (for crash-recovery resumability) and therefore needs the propagation logic.
 
+The same overlay-and-propagation mechanism also delivers `.claude/sdlc-discipline/sdlc-gate.py` (the differential-gate helper) into every chain-agent worktree. It is referenced by the worker's `self-audit` step and the tester prompt at the same relative path, regardless of which rig is running.
+
+## Differential gates (v2.4)
+
+The pack does not enforce a zero-error static-analysis ceiling. It enforces **anti-weakening**: the worker's branch must not introduce ruff or mypy errors, must not introduce suppression directives (`# type: ignore`, `# noqa`, `# pyright: ignore`), must not add `pytest.mark.skip`/`xfail`/`skipif` markers, and must not lose assertion counts in pre-existing test files. Pre-existing baseline noise is tolerated; weakening the branch to silence new failures is not.
+
+Mechanism:
+
+1. **`capture-baseline` formula step** runs after `workspace-setup`, before `implement`. It computes `git merge-base HEAD origin/$TARGET`, checks out that SHA in a scratch worktree, runs ruff/mypy/suppression-scan/pytest-counts, and writes the result to `$RIG_ROOT/.gc/cache/baselines/$BASELINE_SHA/`. The cache is keyed by SHA so concurrent stories sharing a merge-base share a baseline. The bead records `gate.baseline_sha` for downstream phases to read.
+
+2. **Worker self-audit Gate 1** runs `python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir $CACHE_DIR` against the captured baseline. Verdict shape: `pass` (clean), `advisory` (soft signals — cross-file relocations whose global-(code) net is non-positive, test-file deletions), or `fail` (introduced errors, suppressions, skip markers, or lost asserts). `fail` blocks the handoff; `advisory` proceeds with metadata for the reviewer.
+
+3. **Tester** re-runs the same diff in fresh-context. Pytest must pass on its own. The gate verdict drives routing: `pass` or `advisory` → reviewer; `fail` → bounce to worker (or escalate if the failure traces to environment / baseline corruption rather than worker error).
+
+Identity model and known limits live in `overlay/per-provider/claude/.claude/sdlc-discipline/sdlc-gate.py`'s docstring. Within-`(file, code)` swaps are a known v2.4 gap (would require AST-anchored identity); fixed in v2.5 if the false-negative rate warrants it.
+
 ## Three operating modes
 
 Two env vars, set per-rig in `city.toml` via a patch on the finalizer agent, drive the three common scenarios.
@@ -344,6 +360,8 @@ Schema 2. Pack version follows semver:
 
 ### Version history
 
+- **v2.4** — differential gates. Worker captures a static-analysis baseline at `git merge-base HEAD origin/$TARGET` in a new `capture-baseline` formula step. Worker self-audit and tester both run `sdlc-gate.py diff` against the cached baseline; verdict is `pass` / `advisory` / `fail`. Gates fail only on findings the worker introduced (errors, suppressions, skip markers, lost asserts). Removes the v2.3 failure mode where rigs with pre-existing baseline noise saw every PR blocked at the tester.
+- **v2.3** — overlay-mechanism for canonical discipline rules. Pack ships `.claude/rules/*.md` and `.claude/settings.json` via Gas City's `overlay/per-provider/claude/`; tarball machinery removed. Workspace-setup propagates overlay-materialized `.claude/` into the per-bead worktree (rig-tracked files preserved on collision).
 - **v2.0** — five-pool polecat architecture, zero named sessions; documenter split into documenter (docs only) + finalizer (PR refresh + auto-merge gate); tester split out of worker for fresh-context test resolution; SDLC_*_DEFAULT env vars moved from documenter to finalizer.
 - **v1.3** — five named-session phase agents (planner, implementor, tester, reviewer, documenter) with the gascity#1893 kickoff workaround; portable settings.json shipped in the pack.
 - See `comparison/` for v1.3 baseline metrics, the v2.0a interim stall record, and replayable story bodies for cross-version comparison.
