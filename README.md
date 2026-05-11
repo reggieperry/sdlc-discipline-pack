@@ -207,6 +207,26 @@ The tactical rules are short (~150 lines each) and prescribe what to do at the e
 
 These guides used to live in Elder's `docs/` directory. They were moved into the pack at v2.5 to make the pack the single source of truth for engineering discipline that travels across rigs.
 
+## Story-graph bridge (v2.6)
+
+Stories are the design-time artifact for the SDLC chain — markdown files with YAML frontmatter that live under `stories/` at the rig root. bd is the runtime substrate. The v2.6 bridge tool translates between them: parsing frontmatter, validating the dependency graph, and bulk-filing stories into bd as beads.
+
+The bridge ships at `overlay/per-provider/claude/.claude/sdlc-discipline/stories.py` (materialized via the standard overlay path, like `sdlc-gate.py` from v2.4) plus a thin human-facing wrapper at `commands/stories/run.sh`. Five subcommands:
+
+| Subcommand | What it does |
+| ---- | ---- |
+| `validate` | Schema check, dep resolution, sensitive-files consistency, status enum, cycle detection. Returns non-zero on issues. Designed for pre-commit and CI. |
+| `file` | Translates stories with `status: ready` (or specific IDs) into a `bd create --graph` JSON plan, runs the command, parses assigned bead IDs from output, writes `filed_as_bead: <id>` back into each story's frontmatter, flips `status: ready → filed`. |
+| `ready` | Wrapper over `bd ready` that joins bd's output back to story-file paths. |
+| `archive` | Moves a closed story's file into `stories/_archive/` with a closing note (PR URL, merged SHA, completion date appended to frontmatter). |
+| `graph` | Wrapper over `bd graph --html --all`; writes the interactive dependency-graph HTML to a temp path. |
+
+Auto-loaded rule at `overlay/per-provider/claude/.claude/rules/stories.md` documents the frontmatter schema, file naming convention (`<PREFIX>-<NNN>-<slug>.md` where prefix is the bd issue-prefix uppercased), and the lifecycle states (`draft` / `ready` / `filed` / `in-flight` / `merged` / `closed`). The rule loads when editing any file under `stories/**`.
+
+Stdlib-only Python (no `pyyaml` dependency). YAML frontmatter is hand-parsed for the simple shape stories use: scalar keys, list-of-strings values, no anchors or flow style.
+
+Stories complement the existing `commands/story-new/` (interactive single-story scaffold creates a bead directly). The bridge handles bulk filing from a pre-authored `stories/` directory; `story-new` handles one-off interactive creation when you don't want a markdown source file. Use whichever fits the moment.
+
 ## Differential gates (v2.4)
 
 The pack does not enforce a zero-error static-analysis ceiling. It enforces **anti-weakening**: the worker's branch must not introduce ruff or mypy errors, must not introduce suppression directives (`# type: ignore`, `# noqa`, `# pyright: ignore`), must not add `pytest.mark.skip`/`xfail`/`skipif` markers, and must not lose assertion counts in pre-existing test files. Pre-existing baseline noise is tolerated; weakening the branch to silence new failures is not.
@@ -375,6 +395,7 @@ Schema 2. Pack version follows semver:
 
 ### Version history
 
+- **v2.6** — story-graph bridge. New `overlay/.../sdlc-discipline/stories.py` translates between markdown story specs in `stories/` and bd beads. Five subcommands (`validate` / `file` / `ready` / `archive` / `graph`) cover the design-time → runtime lifecycle. New auto-loaded rule `overlay/.../rules/stories.md` documents the frontmatter schema and lifecycle states. Human-facing wrapper at `commands/stories/run.sh`. Stdlib-only; no `pyyaml` dep. The existing `commands/story-new/` interactive single-story scaffold remains; v2.6 adds the bulk file-based path that lets a rig author 60+ stories with deps and file them as a graph in one shot.
 - **v2.5** — principal-engineer guides relocated into the pack. The four long-form guides (Freeman & Pryce TDD, Evans DDD, Liskov modularity, Fowler refactoring) ship via overlay at `.claude/sdlc-discipline/guides/`. Tactical rules updated to point at the new path. Pack becomes the single source of truth for engineering-discipline reference material across rigs.
 - **v2.4** — differential gates. Worker captures a static-analysis baseline at `git merge-base HEAD origin/$TARGET` in a new `capture-baseline` formula step. Worker self-audit and tester both run `sdlc-gate.py diff` against the cached baseline; verdict is `pass` / `advisory` / `fail`. Gates fail only on findings the worker introduced (errors, suppressions, skip markers, lost asserts). Removes the v2.3 failure mode where rigs with pre-existing baseline noise saw every PR blocked at the tester.
 - **v2.3** — overlay-mechanism for canonical discipline rules. Pack ships `.claude/rules/*.md` and `.claude/settings.json` via Gas City's `overlay/per-provider/claude/`; tarball machinery removed. Workspace-setup propagates overlay-materialized `.claude/` into the per-bead worktree (rig-tracked files preserved on collision).
