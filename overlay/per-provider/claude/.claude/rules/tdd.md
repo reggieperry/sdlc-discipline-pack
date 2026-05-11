@@ -40,6 +40,22 @@ For new subsystems (e.g., the pipeline refactor in build item #1):
 2. Implement the thinnest end-to-end slice — minimal real behavior, real entry point, real third-party integrations (or carefully chosen fakes).
 3. Build subsequent features on the skeleton. Don't defer the integration to "when the components are ready" — that's the late-integration trap.
 
+## The refactor step is mandatory — local AND global
+
+Red-green-refactor has three beats. The third is non-negotiable and has two scopes.
+
+**Local refactor** — clean up the immediate change under green tests. Apply only refactorings from the catalog (`refactoring.md`). If you cannot name the move, you are rewriting; stop.
+
+**Global refactor (REQUIRED after all plan steps complete)** — take a wide view of every file your diff touched. For each:
+
+- If the file is now over the modularity cap (≤7 public names per `modularity.md`), the thing you added probably belongs elsewhere. Move it now.
+- Ask where a future engineer would expect to find each new type/function. If your answer differs from where you put it, move it. The spec's "In:" scope is a guideline, not a constraint.
+- Look at nearby modules (imports, callers, callees). Did your addition reveal a smell from the refactoring catalog (Duplicated Code, Divergent Change, Shotgun Surgery, Large Class)? Name the smell, refactor it.
+
+Cross-module moves under the refactor hat are explicitly allowed — even on modules outside your spec's "In:" scope — as long as the move is from the catalog and behavior is preserved.
+
+Skipping the global pass produces god-modules and shared-file merge conflicts across parallel chain runs. The composition discipline binds at the codebase level, not just at the function level. The worker formula's submit-and-exit gate refuses to advance without recorded evidence of the global pass (either applied `refactor:` commits or an explicit "no opportunity, justification: ..." note in the plan).
+
 ## Listen to the tests
 
 When a test is hard to write, the design has a problem. Don't work around it; refactor the production code.

@@ -400,14 +400,64 @@ For `red-green-refactor` steps:
    reason, fix the misunderstanding before writing implementation code.
 2. **Green.** Implement the minimum code to make the test pass. Don't
    over-implement — only the named behavior.
-3. **Refactor.** Clean up under the green tests. Apply only refactorings
-   from the catalog (Extract Function, Rename, etc. — see `refactoring.md`
-   when its glob fires). If you cannot name the move from the catalog,
-   you are not refactoring; you are rewriting. Stop.
+3. **Refactor (local pass).** Clean up the immediate change under green
+   tests. Apply only refactorings from the catalog (Extract Function,
+   Rename, etc. — see `refactoring.md` when its glob fires). If you
+   cannot name the move from the catalog, you are not refactoring; you
+   are rewriting. Stop.
 
 For `pin-after-implementation` steps: implement first, then add the
 regression-pinning test. The test should still be behavior-named and
 fail-clean if the underlying implementation regresses.
+
+## Refactor (global pass) — REQUIRED after all plan steps complete
+
+After every plan step is implemented and tests are green, do not move
+on to commits or self-audit yet. Take a global view of your entire diff
+in the context of the current codebase. This is non-negotiable: the
+local-pass refactor in the R/G/R cycle covers your immediate change;
+this global pass covers the *composition* of your changes with the
+existing codebase.
+
+The questions to ask:
+
+1. **Module cap.** For each file your diff touched, count its public
+   names after the change. If any file is now over the modularity cap
+   (≤ 7 public names per module per `modularity.md`), the thing you
+   added probably belongs elsewhere, OR the existing file is overdue
+   for decomposition. Either way, act on it now.
+
+2. **Cohesion.** For each new type, function, or class you added, ask
+   where a future engineer would expect to find this. If your answer
+   differs from where you put it, MOVE IT via Move Function or Move
+   Field from the catalog. The story spec's "In:" scope is a guideline,
+   not a constraint — if the spec directed you to add a type to file X
+   but a better home exists (especially in a module you also created
+   in this same story), override the spec and move the type. Document
+   the override in your plan with one sentence of justification.
+
+3. **Nearby smells.** Look at modules adjacent to your diff — direct
+   imports, callers, callees. Did your addition reveal a smell from
+   the refactoring catalog (Duplicated Code, Long Function, Divergent
+   Change, Shotgun Surgery, Feature Envy, Large Class, Data Class with
+   only fields)? Name the smell explicitly. If you can name it, refactor
+   it. Each refactor is its own `refactor:` commit per Two Hats.
+
+4. **Scope freedom.** You may modify nearby modules even if they
+   weren't in your spec's "In:" scope, as long as the refactor is
+   behavior-preserving and named from the catalog. Behavior-preserving
+   means tests pass before and after with no test modifications.
+
+After the global pass, your plan MUST contain one of:
+
+- **A list of `refactor:` commits applied**, with each commit naming
+  the move (from the Fowler catalog) and the smell it addressed, OR
+- **An explicit statement**: `Reviewed post-green refactor
+  opportunities: none. Justification: <one sentence stating which
+  files were reviewed and why no opportunity was found.>`
+
+This forcing function is mandatory. Submit-and-exit blocks if the
+plan doesn't contain one of the two evidence forms.
 
 ## Commits
 
@@ -465,11 +515,17 @@ then proceed.
 bd update {{story_id}} --set-metadata current_step="self-audit"
 ```
 
-**Exit criteria:** Every plan step has a corresponding atomic commit
-(`feat:` for red-green-refactor steps, `test: pin` for
-pin-after-implementation steps; refactor and chore commits separate
-where present). The working tree is clean. The branch contains
-commits in plan order, not jumbled.
+**Exit criteria:**
+
+- Every plan step has a corresponding atomic commit (`feat:` for
+  red-green-refactor steps, `test: pin` for pin-after-implementation
+  steps; refactor and chore commits separate where present).
+- The working tree is clean. The branch contains commits in plan
+  order, not jumbled.
+- The plan contains global-pass refactor audit evidence — either
+  applied `refactor:` commits naming their moves, OR an explicit
+  "Reviewed post-green refactor opportunities: none. Justification:
+  ..." statement. Without one or the other, implement is not done.
 """
 
 
@@ -549,17 +605,44 @@ sensitive-files list and is not declared in `PLANNED`: STOP. Update
 the plan to declare the file and commit the amendment as
 `docs(plan): declare <path> as touched`, then re-run this step.
 
+## Gate 4 — Global-pass refactor audit evidence
+
+The implement step's global-pass refactor discipline requires evidence
+in the plan that the post-green audit happened. This gate verifies that
+evidence is present. Without it, implement is not done — the worker
+either skipped the audit or didn't record the result.
+
+```bash
+EVIDENCE=$(grep -cE '^(refactor:|Reviewed post-green refactor)' plans/{{story_id}}.md)
+```
+
+The plan must contain either:
+
+- **One or more `refactor:` lines** documenting moves applied during the
+  global pass, each naming the Fowler catalog move and the smell it
+  addressed (matches the pattern `refactor: <move> [smell: <name>]` or
+  similar — the recognizable shape is "refactor:" prefix in the plan's
+  refactor-evidence section, alongside the move name).
+- **OR a "Reviewed post-green refactor opportunities" statement** with
+  a one-sentence justification of which files were reviewed and why no
+  opportunity was found.
+
+If `EVIDENCE` is zero: STOP. Return to the implement step and complete
+the global-pass audit. Update the plan with the evidence. Re-run this
+step.
+
 ## Recording
 
 ```bash
 bd update {{story_id}} --set-metadata current_step="submit-and-exit"
 ```
 
-**Exit criteria:** All three gates pass. Differential gate green
-(no introduced ruff/mypy errors, no introduced suppressions, no new
-skip markers, no lost asserts). Every acceptance criterion has a
-pinning test. No undeclared sensitive-file edits. The bead's
-`current_step` is `submit-and-exit`.
+**Exit criteria:** All four gates pass. Differential gate green (no
+introduced ruff/mypy errors, no introduced suppressions, no new skip
+markers, no lost asserts). Every acceptance criterion has a pinning
+test. No undeclared sensitive-file edits. Global-pass refactor audit
+evidence is recorded in the plan. The bead's `current_step` is
+`submit-and-exit`.
 """
 
 
