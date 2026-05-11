@@ -25,6 +25,13 @@ archive    For a closed bead, move its story file into stories/_archive/
            and append a closing note (PR URL, merged SHA, completion
            date).
 
+rebase     Manual re-entry into the chain for a closed bead with an open
+           PR that has fallen behind its target branch. Reopens the bead
+           with `gc.routed_to=<rig>/sdlc-discipline.finalizer` so the
+           finalizer spawns and re-runs its rebase-against-target step.
+           If the rebase still conflicts, the finalizer routes the bead
+           to the worker per the v2.7.0 bounce protocol.
+
 graph      Wrapper over `bd graph --html --all`. Writes HTML to a temp
            path and prints the path for the caller to open.
 
@@ -542,6 +549,123 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# rebase
+# ---------------------------------------------------------------------------
+
+
+def cmd_rebase(args: argparse.Namespace) -> int:
+    """Reopen a closed chain bead and route it back to the finalizer.
+
+    Used after a sibling PR merges and moves the target branch — the PR
+    open against the old target now needs to rebase. The finalizer's
+    rebase-against-target step will either succeed (and re-merge) or
+    bounce the bead to the worker per the v2.7.0 protocol.
+    """
+    story_id = args.story_id
+    rig_root = find_rig_root()
+
+    # Find the closed bead whose metadata.story_id matches.
+    result = subprocess.run(
+        ["bd", "list", "--status=closed", "--limit", "5000", "--json"],
+        cwd=rig_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"rebase: bd list failed:\n{result.stderr}", file=sys.stderr)
+        return result.returncode
+    try:
+        beads = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"rebase: bd list output is not JSON: {exc}", file=sys.stderr)
+        return 1
+
+    matching = [b for b in beads if (b.get("metadata") or {}).get("story_id") == story_id]
+    if not matching:
+        print(f"rebase: no closed bead found for story_id '{story_id}'", file=sys.stderr)
+        return 1
+    if len(matching) > 1:
+        ids = ", ".join(b["id"] for b in matching)
+        print(
+            f"rebase: multiple closed beads for story_id '{story_id}' ({ids}); "
+            "pick the bead manually via bd",
+            file=sys.stderr,
+        )
+        return 1
+
+    bead = matching[0]
+    bead_id = bead["id"]
+    md = bead.get("metadata") or {}
+
+    # Validate the bead is in the expected post-finalize state.
+    final_state = md.get("final_state", "")
+    if final_state != "pr_open_for_human":
+        print(
+            f"rebase: bead {bead_id} has final_state='{final_state}', "
+            "not 'pr_open_for_human'; refusing to rebase",
+            file=sys.stderr,
+        )
+        return 1
+    pr_url = md.get("pr_url", "")
+    if not pr_url:
+        print(f"rebase: bead {bead_id} has no metadata.pr_url; cannot rebase", file=sys.stderr)
+        return 1
+
+    # Confirm the PR is still open before reopening the bead.
+    pr_number = pr_url.rstrip("/").split("/")[-1]
+    result = subprocess.run(
+        ["gh", "pr", "view", pr_number, "--json", "state"],
+        cwd=rig_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"rebase: gh pr view {pr_number} failed:\n{result.stderr}", file=sys.stderr)
+        return result.returncode
+    try:
+        pr_state = json.loads(result.stdout).get("state", "")
+    except json.JSONDecodeError as exc:
+        print(f"rebase: gh pr view output is not JSON: {exc}", file=sys.stderr)
+        return 1
+    if pr_state != "OPEN":
+        print(
+            f"rebase: PR #{pr_number} is '{pr_state}', not OPEN; nothing to rebase against",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Determine routing target from the bead's recorded rig.
+    rig = md.get("rig", "")
+    if not rig:
+        print(
+            f"rebase: bead {bead_id} has no metadata.rig; "
+            "cannot determine finalizer routing target",
+            file=sys.stderr,
+        )
+        return 1
+    finalizer_target = f"{rig}/sdlc-discipline.finalizer"
+
+    # Reopen and route. Preserve any existing merge_failure_count so retries
+    # via this command are idempotent against the bounce limit.
+    update_args = [
+        "bd",
+        "update",
+        bead_id,
+        "--status=open",
+        f"--set-metadata=gc.routed_to={finalizer_target}",
+    ]
+    result = subprocess.run(update_args, cwd=rig_root, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"rebase: bd update {bead_id} failed:\n{result.stderr}", file=sys.stderr)
+        return result.returncode
+
+    print(f"rebase: reopened {bead_id} ({story_id}) routed to {finalizer_target}")
+    print(f"  PR: {pr_url}")
+    print("  Finalizer will spawn within the next reconcile pulse (~30s).")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # graph
 # ---------------------------------------------------------------------------
 
@@ -601,6 +725,13 @@ def main() -> int:
     p_archive.add_argument("--pr", help="Merged PR URL to record in closing note.")
     p_archive.add_argument("--sha", help="Merged SHA to record in closing note.")
     p_archive.set_defaults(func=cmd_archive)
+
+    p_rebase = sub.add_parser(
+        "rebase",
+        help="Reopen a closed bead and route it to the finalizer for a rebase pass.",
+    )
+    p_rebase.add_argument("story_id", help="Story ID to rebase (e.g., EL-003).")
+    p_rebase.set_defaults(func=cmd_rebase)
 
     p_graph = sub.add_parser("graph", help="Render bd dependency graph as HTML.")
     p_graph.add_argument("--id", help="Render only the specified bead's subgraph.")
