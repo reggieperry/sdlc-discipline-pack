@@ -2,10 +2,11 @@
 # sdlc-cost-rollup.sh — observer hook fired by orders/sdlc-cost-rollup.toml
 #
 # Triggered on bead.closed. If the closed bead is a phase bead from an SDLC
-# chain, append a row to <city>/cost_history.csv. Captures what we can today;
-# cost_usd is left as 0 because Gas City v1.1.1 doesn't expose per-session
-# token usage in a queryable form. When that lands, update this script to
-# fill cost_usd from the right source — schema stays the same.
+# chain, append a row to <city>/cost_history.csv. cost_usd is computed by
+# scanning the agent session's Claude Code JSONL (see sdlc-cost-helper.py),
+# summing tokens by model, and applying Anthropic's published pricing. A
+# bead closed before any session JSONL existed (e.g., reaped early) will
+# still get a row with cost_usd=0; the row is preserved as an audit trail.
 #
 # Environment provided by the order trigger:
 #   GC_EVENT_TYPE       e.g. "bead.closed"
@@ -76,12 +77,55 @@ STORY_ID=$(echo "$METADATA" | jq -r '.story_id // empty')
 RIG=$(echo "$METADATA" | jq -r '.rig // empty')
 [ -z "$RIG" ] && RIG="${GC_RIG:-unknown}"
 
-for phase in planner implementor tester reviewer documenter kickoff; do
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COST_HELPER="$SCRIPT_DIR/sdlc-cost-helper.py"
+
+# Map each SDLC chain phase to its pool name (the segment under
+# .gc/worktrees/<rig>/ where the agent's per-instance worktree lives).
+# Must stay in sync with each phase agent's `work_dir` template in
+# agents/<phase>/agent.toml.
+pool_for_phase() {
+  case "$1" in
+    worker)     echo "sdlc" ;;
+    tester)     echo "sdlc-testers" ;;
+    reviewer)   echo "sdlc-reviewers" ;;
+    documenter) echo "sdlc-documenters" ;;
+    finalizer)  echo "sdlc-finalizers" ;;
+    *)          echo "" ;;
+  esac
+}
+
+# Sum cost_usd across all agent-instance worktrees under <city>/.gc/worktrees/<rig>/<pool>/
+# whose Claude Code JSONLs fall in the phase's time window. Only one instance
+# typically has matching JSONLs (the one that ran the session), but multiple
+# are tolerated for restart cases.
+compute_phase_cost() {
+  local phase="$1" started="$2" completed="$3" rig="$4"
+  local pool total instance_cost
+  pool=$(pool_for_phase "$phase")
+  [ -z "$pool" ] && { echo "0"; return; }
+  local pool_dir="$CITY_ROOT/.gc/worktrees/$rig/$pool"
+  if [ ! -d "$pool_dir" ] || [ -z "$started" ] || [ -z "$completed" ] || [ ! -f "$COST_HELPER" ]; then
+    echo "0"; return
+  fi
+  total="0"
+  for instance_dir in "$pool_dir"/*/; do
+    [ -d "$instance_dir" ] || continue
+    instance_cost=$(python3 "$COST_HELPER" \
+      --worktree "$instance_dir" \
+      --started-at "$started" \
+      --completed-at "$completed" 2>/dev/null || echo "0")
+    total=$(awk -v a="$total" -v b="$instance_cost" 'BEGIN{ printf "%.4f", a+b }')
+  done
+  echo "$total"
+}
+
+for phase in worker tester reviewer documenter finalizer; do
   SESSION=$(echo "$METADATA" | jq -r --arg p "$phase" '.["\($p).session_id"] // empty')
   if [ -n "$SESSION" ] && [ "$SESSION" != "null" ]; then
     STARTED=$(echo "$METADATA" | jq -r --arg p "$phase" '.["\($p).started_at"] // empty')
     COMPLETED=$(echo "$METADATA" | jq -r --arg p "$phase" '.["\($p).completed_at"] // empty')
-    COST=$(echo "$METADATA" | jq -r --arg p "$phase" '.["\($p).cost_usd"] // "0"')
+    COST=$(compute_phase_cost "$phase" "$STARTED" "$COMPLETED" "$RIG")
     emit_row "$phase" "$SESSION" "$STARTED" "$COMPLETED" "$COST" "$STORY_ID" "$RIG"
   fi
 done
