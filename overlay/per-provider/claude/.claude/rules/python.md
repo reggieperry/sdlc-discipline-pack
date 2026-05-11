@@ -57,9 +57,34 @@ paths:
 - Import specific names: from datetime import datetime, timedelta.
 - Lazy import heavy libraries if only used in one function.
 
+## Algorithmic complexity
+- Membership tests inside a loop use set or dict. Never `if x in some_list` inside another loop.
+- Build strings with `"".join(parts)`, not `s += ...` in a loop.
+- Sort once outside the loop. Don't re-sort the same sequence on every iteration.
+- Use generator expressions when feeding any, all, sum, min, max, next — they short-circuit and don't allocate.
+- Materialize to a list when you need length, indexing, or two passes. Don't iterate a generator twice.
+- In hot paths, bind `dict.keys()` / `.values()` / `.items()` to a name once; don't recompute the view per iteration.
+- Double loops over the same collection need a hashed lookup or a sort+merge — never O(n²) by default.
+
+## Iteration
+- Use `enumerate(seq)` instead of `range(len(seq))`. Use `zip(a, b)` instead of parallel indexing.
+- Use `dict.items()` to iterate key/value pairs. Don't index back into the dict in the loop body.
+- Use `zip(a, b, strict=True)` when length equality is an invariant. Silent truncation is a bug surface.
+- Never mutate a list or dict while iterating it. Iterate `list(d)` or build a new collection via comprehension.
+- Use `itertools.pairwise(seq)` for consecutive-element comparisons (price bars, time series).
+- Use `itertools.chain.from_iterable` to flatten one level. Don't nest comprehensions for flattening.
+- `for ... else` is reserved for "loop completed without break." If you have to look it up, refactor.
+
 ## Asyncio
-- Never time.sleep() in main process. Use await asyncio.sleep().
-- Never sync blocking I/O (requests.get, open().read on network) in the event loop.
+- Never `time.sleep()` in main process. Use `await asyncio.sleep()`.
+- Never sync blocking I/O (`requests.get`, `open().read` on network, sync DB drivers) in the event loop.
+- Default to `async with asyncio.TaskGroup()` for concurrent sibling tasks. Use `asyncio.gather(*, return_exceptions=True)` only when partial failure is acceptable and siblings must continue (e.g., scanning many tickers where some can fail).
+- Use `asyncio.as_completed` only when streaming earliest-first results matters.
+- Every `asyncio.create_task()` keeps a strong reference — named variable, module-level set, or a `TaskGroup`. Unreferenced tasks can be garbage-collected mid-flight in 3.12+.
+- Catch `asyncio.CancelledError`, run cleanup in `finally`, and re-raise. Never swallow `CancelledError`.
+- Bound concurrent fan-out with `asyncio.Semaphore`. For unbounded or streaming inputs, use `asyncio.wait(..., return_when=FIRST_COMPLETED)` over a rolling task set rather than `gather` over semaphore-wrapped coroutines.
+- CPU-bound work goes through `loop.run_in_executor(pool, fn, *args)`. The target function is module-level (picklable) and arguments are picklable.
+- Sync helpers called from a coroutine are fine if and only if they don't do I/O and aren't CPU-heavy.
 
 ## Self-review gate (run before declaring ANY task done)
 1. `uv run pytest tests/ -v` — passes with ≥60% coverage
