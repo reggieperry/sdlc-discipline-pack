@@ -647,11 +647,19 @@ def cmd_rebase(args: argparse.Namespace) -> int:
 
     # Reopen and route. Preserve any existing merge_failure_count so retries
     # via this command are idempotent against the bounce limit.
+    #
+    # Clear the assignee. The supervisor's pool reconciler queries with
+    # `--unassigned` when scaling pools, so a bead with a stale assignee
+    # (left over from its original chain run) is invisible to scale-check
+    # even when routed correctly. Clearing here lets the finalizer pool
+    # spin up a fresh session, which will `--claim` (reassign) on startup.
     update_args = [
         "bd",
         "update",
         bead_id,
         "--status=open",
+        "--assignee",
+        "",
         f"--set-metadata=gc.routed_to={finalizer_target}",
     ]
     result = subprocess.run(update_args, cwd=rig_root, capture_output=True, text=True)

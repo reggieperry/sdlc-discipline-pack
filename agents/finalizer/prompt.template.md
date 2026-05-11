@@ -121,9 +121,15 @@ if [ $REBASE_RC -ne 0 ]; then
         # metadata.merge_failure_count > 0) handles the rebase, resolves,
         # re-tests, force-pushes, and re-routes to tester. Full chain
         # re-walks after that — same handoff machinery as a tester-bounce.
+        #
+        # Clear assignee: closed→open transitions need the bead unassigned
+        # so the supervisor's `--unassigned` pool scale-check sees it.
+        # In-progress→in-progress transitions (worker→tester→reviewer etc.)
+        # don't have this constraint, but a status flip to `open` does.
         WORKER_TARGET="${GC_RIG}/sdlc-discipline.worker"
         bd update $STORY_ID \
           --status=open \
+          --assignee "" \
           --set-metadata "gc.routed_to=$WORKER_TARGET" \
           --set-metadata "merge_failure_count=$BOUNCE_COUNT" \
           --set-metadata "merge_failure_files=$CONFLICT_FILES" \
