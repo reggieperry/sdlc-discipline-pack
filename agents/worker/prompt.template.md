@@ -40,6 +40,154 @@ bd update $STORY_ID \
 
 These timestamps feed `cost_history.csv` via the cost-rollup observer when the bead closes.
 
+## Check for rebase-iteration mode (v2.7.0+)
+
+Before reading the formula, check whether this is a fresh worker session on a new story or a re-entry to fix a merge conflict on an existing branch. The finalizer routes a bead back to the worker pool when `git rebase origin/$TARGET` produces conflicts; that path sets `metadata.merge_failure_count` to a non-zero value.
+
+```bash
+MERGE_FAILURE_COUNT=$(bd show $STORY_ID --json | jq -r '.[0].metadata.merge_failure_count // "0"')
+```
+
+**If `MERGE_FAILURE_COUNT == 0`: ignore this section.** You are working on a fresh story. Proceed to "Work protocol" below — load the `mol-sdlc-work` formula and follow its six steps normally.
+
+**If `MERGE_FAILURE_COUNT > 0`: you are in rebase-iteration mode.** Do not load the formula. Do not write a new plan. The branch, the worktree, and the implementation already exist on origin; your job is to bring them up to date with the target branch, resolve the conflicts the finalizer detected, re-run tests, and force-push. Then route to the tester pool so the full chain re-walks against the refreshed branch.
+
+**Placeholder convention.** Throughout the bash blocks below, angle-bracketed strings like `<module>`, `<name>`, `<describe the specific collision>` are placeholders — they are not literal arguments and must be replaced with concrete values before running. Bash blocks that use real environment variables (e.g., `"$BRANCH"`, `"$RIG_ROOT"`) are executable as-is; bash blocks containing `<…>` need substitution from the situation at hand. When in doubt, the rule is: angle brackets = read and replace; dollar-sign or curly-brace = executable.
+
+### Rebase-iteration protocol
+
+Read the conflict context the finalizer recorded:
+
+```bash
+RIG_ROOT="${GC_RIG_ROOT:-$(pwd)}"
+BRANCH=$(bd show $STORY_ID --json | jq -r '.[0].metadata.branch')
+TARGET=$(bd show $STORY_ID --json | jq -r '.[0].metadata.merge_failure_target // .[0].metadata.target // "main"')
+CONFLICT_FILES=$(bd show $STORY_ID --json | jq -r '.[0].metadata.merge_failure_files')
+WORKTREE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.work_dir')
+if [ -z "$WORKTREE" ] || [ ! -d "$WORKTREE" ]; then
+    # Worktree missing — recreate from origin/$BRANCH and re-record metadata.
+    WORKTREE="$RIG_ROOT/.gc/worktrees/${GC_RIG}/sdlc/$STORY_ID"
+    mkdir -p "$(dirname "$WORKTREE")"
+    git -C "$RIG_ROOT" fetch origin "$BRANCH"
+    git -C "$RIG_ROOT" worktree add "$WORKTREE" "origin/$BRANCH"
+    bd update $STORY_ID --set-metadata work_dir="$WORKTREE"
+fi
+cd "$WORKTREE"
+```
+
+Step 1 — fetch and check out the branch:
+
+```bash
+git fetch origin
+git checkout "$BRANCH"
+git reset --hard "origin/$BRANCH"   # discard any stale local state
+```
+
+Step 2 — attempt the rebase:
+
+```bash
+git rebase "origin/$TARGET"
+```
+
+Step 3 — resolve each conflict. Read both sides of every conflict marker carefully. There are two patterns to recognize:
+
+- **Textual conflict** — the same lines were edited by two diverging commits. Pick the resolution that preserves the story's intent. The story's *behavior* has not changed; the *surrounding code* has. Use the bead's description as the source of truth for what behavior you are pinning, then make the textual reconciliation that preserves it.
+
+- **Semantic conflict** — your code references a type, function, or name whose meaning or shape has changed on the target branch. Examples: a Protocol's signature has grown a new required argument; a class with the same name was added to another module; a public type's fields were renamed. Tests will surface these even after a clean textual merge.
+
+### Rename gate — when to escalate instead of resolve
+
+You must NOT unilaterally rename a public type, function, or variable to resolve a semantic conflict. "Public" means: any name exported from a module's surface that other files in the rig import.
+
+Test for it before attempting the rename. Substitute the actual import path and symbol from the conflict you're examining.
+
+Worked example — if you've identified that the conflict involves `BudgetExceeded` exported from `core.state`:
+
+```bash
+grep -r "from elder_trading_system.core.state import BudgetExceeded" "$RIG_ROOT" --include="*.py" \
+    | grep -v "$WORKTREE" | head -5
+```
+
+The general pattern (replace `<module>` and `<name>` with concrete values from the conflict): `grep -r "from <module> import <name>" "$RIG_ROOT" --include="*.py" | grep -v "$WORKTREE" | head -5`.
+
+If grep returns matches outside your own worktree, the name is in use elsewhere — renaming it would break those consumers.
+
+If the conflict requires renaming such a name, stop and escalate. Substitute a concrete `<reason>` describing the specific collision (which name, which module, which consumers):
+
+```bash
+REASON="rebase conflict requires renaming public type; details: <describe the specific collision>"
+bd update $STORY_ID \
+  --set-metadata requires_human_decision=true \
+  --set-metadata "human_decision_reason=$REASON" \
+  --set-metadata "gc.routed_to=" \
+  --status=escalated --notes "rebase blocked: rename of public type required"
+WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
+gc mail send "$WITNESS_TARGET" -s "ESCALATION: $STORY_ID — rebase requires public-type rename [HIGH]" \
+  -m "Branch: $BRANCH. Conflict in $CONFLICT_FILES. $REASON"
+git rebase --abort 2>/dev/null || true
+gc runtime drain-ack
+exit
+```
+
+The chain stops cleanly. A human reviews the architectural collision, decides on the rename (or restructure), and either resumes the chain manually or files a follow-up story.
+
+### Continue the rebase
+
+After resolving each conflict (within the gate), stage every file that now reads clean and continue. `git diff --name-only --diff-filter=U` lists paths still marked unmerged; the goal is to drive that list to empty before continuing.
+
+```bash
+# Confirm every conflict is resolved (this should print nothing):
+git diff --name-only --diff-filter=U
+
+# Stage the files you just edited. The `-u` form stages tracked-file
+# updates only — safer than `-A` if your editor created any noise.
+git add -u
+
+git rebase --continue
+```
+
+If new conflicts appear, repeat resolution. The rebase walks each of your commits in turn.
+
+### Verify after rebase
+
+The differential gate's baseline is now the new `git merge-base HEAD origin/$TARGET` — automatic. Your post-rebase code must not introduce new ruff/mypy errors or reduce assertion counts vs. that fresh baseline.
+
+Run the same self-audit gates a fresh worker session would:
+
+```bash
+# Lint + types (fast; catch obvious breakage).
+uv run ruff check . 2>&1 | tail -5
+uv run mypy . 2>&1 | tail -5
+
+# Full test suite. If any tests fail, the rebase exposed a semantic issue —
+# treat it like any other failing-test cycle: read the failure, fix the
+# code (subject to the rename gate), re-run.
+uv run pytest tests/ -v 2>&1 | tail -10
+```
+
+Iterate on the resolution until tests pass and lint/types are clean.
+
+### Push and route to tester
+
+```bash
+git push --force-with-lease origin "$BRANCH"
+```
+
+`--force-with-lease` refuses to push if the remote tip moved since you fetched — safer than `--force`. If it refuses, another agent has pushed to the same branch in the interim; `git fetch` and re-resolve.
+
+Route to tester. The full chain re-walks: tester re-runs tests against the rebased commits, reviewer re-reviews the post-rebase diff, documenter re-checks the docs, finalizer re-attempts the rebase against (possibly new) main.
+
+```bash
+bd update $STORY_ID \
+  --set-metadata "worker.completed_at=$(date -Iseconds)" \
+  --set-metadata "gc.routed_to=${GC_RIG}/sdlc-discipline.tester" \
+  --notes "rebase iteration $MERGE_FAILURE_COUNT complete; routed to tester"
+gc runtime drain-ack
+exit
+```
+
+Note: you DO NOT clear `merge_failure_count`. The counter accumulates across iterations until the finalizer sees a clean rebase, at which point the merge succeeds and the bead closes. The counter caps via `SDLC_MAX_REBASE_BOUNCES` (default 3) — past that, the finalizer escalates instead of bouncing.
+
 ## Work protocol
 
 **Read the formula steps and follow them in order.** Do not skip steps. Do not interleave them with other work. The formula encodes the SDLC discipline — plan before implementing, test before refactoring, push before reassigning.

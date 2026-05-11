@@ -69,6 +69,18 @@ else
 fi
 ```
 
+## Look up the existing PR (early — needed by the bounce handler)
+
+A PR may already exist (documenter opened it; or this is a re-entry after a v2.7.0 bounce). Capture the URL/number before the refresh step so the bounce handler can comment if a rebase conflict fires. The "Open the PR (if needed)" block below still owns the create-when-missing path.
+
+```bash
+PR_URL=$(bd show $STORY_ID --json | jq -r '.[0].metadata.pr_url // empty')
+PR_NUMBER=""
+if [ -n "$PR_URL" ]; then
+    PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+fi
+```
+
 ## Refresh against origin/main
 
 A clean PR merges from a current base. Bring the branch up to date with `origin/$TARGET` before opening or refreshing the PR.
@@ -79,14 +91,48 @@ git rebase "origin/$TARGET"
 REBASE_RC=$?
 
 if [ $REBASE_RC -ne 0 ]; then
+    # Capture conflict context BEFORE aborting — the worker needs to know
+    # which files conflicted.
+    CONFLICT_FILES=$(git diff --name-only --diff-filter=U | tr '\n' ',' | sed 's/,$//')
     git rebase --abort 2>/dev/null || true
-    bd update $STORY_ID \
-      --set-metadata refresh_status="conflict" \
-      --set-metadata refresh_failure_summary="rebase against origin/$TARGET produced conflicts; manual resolution required" \
-      --status=escalated --notes "finalize blocked: rebase conflict"
-    WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
-    gc mail send "$WITNESS_TARGET" -s "ESCALATION: finalize $STORY_ID — rebase conflict [HIGH]" \
-      -m "Branch: $BRANCH; cannot rebase against origin/$TARGET cleanly."
+
+    # Bounce counter — incremented on every rebase conflict; capped by
+    # SDLC_MAX_REBASE_BOUNCES (default 3).
+    BOUNCE_COUNT=$(bd show $STORY_ID --json | jq -r '.[0].metadata.merge_failure_count // "0"')
+    BOUNCE_COUNT=$((BOUNCE_COUNT + 1))
+    MAX_BOUNCES="${SDLC_MAX_REBASE_BOUNCES:-3}"
+
+    if [ "$BOUNCE_COUNT" -ge "$MAX_BOUNCES" ]; then
+        # Exhausted the bounce budget — fall back to today's escalation.
+        bd update $STORY_ID \
+          --set-metadata refresh_status="conflict" \
+          --set-metadata "merge_failure_count=$BOUNCE_COUNT" \
+          --set-metadata "refresh_failure_summary=exhausted $MAX_BOUNCES rebase attempts; conflicts in: $CONFLICT_FILES" \
+          --status=escalated --notes "finalize blocked: rebase bounce limit reached"
+        WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
+        gc mail send "$WITNESS_TARGET" -s "ESCALATION: $STORY_ID — rebase bounce limit [HIGH]" \
+          -m "Branch: $BRANCH; exhausted rebase attempts. Files: $CONFLICT_FILES"
+        if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body "🤖 chain: rebase bounce limit ($MAX_BOUNCES) exhausted. Conflicts in: $CONFLICT_FILES. Manual intervention required."
+        fi
+    else
+        # Route the bead back to the worker pool with conflict context.
+        # The worker's rebase-iteration branch (detected via
+        # metadata.merge_failure_count > 0) handles the rebase, resolves,
+        # re-tests, force-pushes, and re-routes to tester. Full chain
+        # re-walks after that — same handoff machinery as a tester-bounce.
+        WORKER_TARGET="${GC_RIG}/sdlc-discipline.worker"
+        bd update $STORY_ID \
+          --status=open \
+          --set-metadata "gc.routed_to=$WORKER_TARGET" \
+          --set-metadata "merge_failure_count=$BOUNCE_COUNT" \
+          --set-metadata "merge_failure_files=$CONFLICT_FILES" \
+          --set-metadata "merge_failure_target=$TARGET" \
+          --set-metadata "merge_failure_at=$(date -Iseconds)"
+        if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body "🤖 chain: rebase against \`origin/$TARGET\` produced conflicts in \`$CONFLICT_FILES\`. Bouncing to worker (attempt $BOUNCE_COUNT of $MAX_BOUNCES)."
+        fi
+    fi
     gc runtime drain-ack
     exit
 fi
@@ -98,16 +144,9 @@ git push --force-with-lease origin "$BRANCH"
 
 ## Open the PR (if needed)
 
-The documenter may already have opened the PR if `SDLC_OPEN_PR_DEFAULT=true`. Check first.
+The documenter may already have opened the PR if `SDLC_OPEN_PR_DEFAULT=true`. `PR_URL`/`PR_NUMBER` were captured before the refresh step; if missing or stale, fall through to the create path.
 
 ```bash
-PR_URL=$(bd show $STORY_ID --json | jq -r '.[0].metadata.pr_url // empty')
-PR_NUMBER=""
-
-if [ -n "$PR_URL" ]; then
-    PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
-fi
-
 if [ -z "$PR_URL" ] || ! gh pr view "$PR_NUMBER" >/dev/null 2>&1; then
     OPEN_PR=$(bd show $STORY_ID --json | jq -r '.[0].metadata.open_pr // empty')
     [ -z "$OPEN_PR" ] && OPEN_PR="${SDLC_OPEN_PR_DEFAULT:-false}"
