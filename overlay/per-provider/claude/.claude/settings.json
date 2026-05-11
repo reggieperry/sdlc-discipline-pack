@@ -16,7 +16,6 @@
     "allow": [
       "Read(**)",
       "Edit(**)",
-
       "Bash(uv run pytest *)",
       "Bash(uv run ruff *)",
       "Bash(uv run mypy *)",
@@ -24,7 +23,6 @@
       "Bash(uv sync *)",
       "Bash(uv add *)",
       "Bash(uv lock *)",
-
       "Bash(git checkout *)",
       "Bash(git add *)",
       "Bash(git commit *)",
@@ -40,13 +38,11 @@
       "Bash(git worktree *)",
       "Bash(git stash *)",
       "Bash(git rm *)",
-
       "Bash(gh issue *)",
       "Bash(gh pr *)",
       "Bash(gh api *)",
       "Bash(gh repo *)",
       "Bash(gh run *)",
-
       "Bash(ls *)",
       "Bash(cat *)",
       "Bash(find *)",
@@ -59,5 +55,6 @@
       "Bash(git push -f *)",
       "Bash(rm -rf *)"
     ]
-  }
+  },
+  "awaySummaryEnabled": false
 }
