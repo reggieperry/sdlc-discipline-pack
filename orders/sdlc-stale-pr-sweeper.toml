@@ -1,0 +1,5 @@
+[order]
+description = "Periodic sweep — scan chain beads with final_state=pr_open_for_human, trigger rebase on PRs whose mergeable state is BEHIND or DIRTY relative to their target. Complements orders/sdlc-rebase-watcher.toml: the bead.closed watcher reacts immediately when a chain merge fires, but GitHub may not have finished recomputing mergeable state for siblings yet — those return mergeStateStatus=UNKNOWN at the watcher's check time and get skipped. This sweeper runs on a cooldown so it catches the cases the event-triggered handler missed."
+trigger = "cooldown"
+cooldown = "5m"
+exec = "$PACK_DIR/assets/scripts/sdlc-stale-pr-sweeper.sh"
