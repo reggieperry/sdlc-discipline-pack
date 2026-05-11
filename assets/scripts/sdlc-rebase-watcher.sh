@@ -106,8 +106,16 @@ echo "$SIBLINGS" | while IFS= read -r sibling_id; do
 
     case "$MERGEABLE" in
         BEHIND|DIRTY)
-            echo "watcher: PR #$PR_NUMBER ($STORY_ID) is $MERGEABLE; triggering gc sdlc-stories rebase" >&2
-            cd "$RIG_ROOT" && gc sdlc-stories rebase "$STORY_ID" >&2 || true
+            echo "watcher: PR #$PR_NUMBER ($STORY_ID) is $MERGEABLE; triggering rebase via stories.py" >&2
+            # Invoke the bridge script directly via the pack's overlay path
+            # rather than the `gc sdlc-discipline stories rebase` wrapper.
+            # The wrapper walks up from cwd looking for
+            # .claude/sdlc-discipline/stories.py — which is materialized into
+            # agent worktrees at session-spawn but not at the rig root, so
+            # the wrapper fails for order-trigger contexts. Direct python3 on
+            # the canonical pack path always works because PACK_DIR is set by
+            # the order trigger.
+            cd "$RIG_ROOT" && python3 "$PACK_DIR/overlay/per-provider/claude/.claude/sdlc-discipline/stories.py" rebase "$STORY_ID" >&2 || true
             ;;
         CLEAN|UNKNOWN|BLOCKED|HAS_HOOKS|UNSTABLE)
             # CLEAN — no rebase needed.
