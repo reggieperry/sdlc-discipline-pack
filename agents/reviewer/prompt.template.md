@@ -58,8 +58,11 @@ else
         echo "reviewer: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
         bd update $STORY_ID --set-metadata review_verdict=fail \
           --set-metadata review_failure_summary="branch not pushed to origin"
-        # Worker is a pool agent — gc.routed_to ONLY, never --assignee.
-        bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
+        # Worker is a pool agent — gc.routed_to ONLY, never set --assignee
+        # to a pool name. But the bead is currently assigned to THIS reviewer
+        # (from --claim at startup), so clear it on the status=open flip so
+        # the worker pool reconciler sees the demand.
+        bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
         gc runtime drain-ack
         exit
     fi
@@ -157,7 +160,7 @@ bd update $STORY_ID \
   --set-metadata "reviewer.completed_at=$(date -Iseconds)" \
   --set-metadata review_file="reviews/$STORY_ID.md" \
   --set-metadata review_verdict="pass"
-bd update $STORY_ID --status=open --set-metadata gc.routed_to="$DOCUMENTER_TARGET"
+bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$DOCUMENTER_TARGET"
 gc runtime drain-ack
 exit
 ```
@@ -177,7 +180,7 @@ bd update $STORY_ID \
   --set-metadata review_verdict="fail" \
   --set-metadata review_failure_summary="<one-line>" \
   --set-metadata rejection_reason="<concrete; what to fix>"
-bd update $STORY_ID --status=open --set-metadata gc.routed_to="$WORKER_TARGET"
+bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$WORKER_TARGET"
 gc runtime drain-ack
 exit
 ```

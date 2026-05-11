@@ -122,10 +122,12 @@ if [ $REBASE_RC -ne 0 ]; then
         # re-tests, force-pushes, and re-routes to tester. Full chain
         # re-walks after that — same handoff machinery as a tester-bounce.
         #
-        # Clear assignee: closed→open transitions need the bead unassigned
-        # so the supervisor's `--unassigned` pool scale-check sees it.
-        # In-progress→in-progress transitions (worker→tester→reviewer etc.)
-        # don't have this constraint, but a status flip to `open` does.
+        # Clear assignee: any transition that flips status to `open`
+        # must leave the bead unassigned so the supervisor's
+        # `--unassigned` pool scale-check sees the demand. Every chain
+        # handoff (worker→tester, tester→reviewer, reviewer→documenter,
+        # documenter→finalizer, plus any bounce-back) does that flip,
+        # so every handoff must clear --assignee.
         WORKER_TARGET="${GC_RIG}/sdlc-discipline.worker"
         bd update $STORY_ID \
           --status=open \

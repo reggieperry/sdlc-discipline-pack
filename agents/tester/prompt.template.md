@@ -49,7 +49,7 @@ if ! git remote get-url origin >/dev/null 2>&1; then
     else
         bd update $STORY_ID --set-metadata test_status="branch_missing" \
           --set-metadata tester.no_remote_configured="true"
-        bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
+        bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
         gc runtime drain-ack
         exit
     fi
@@ -60,7 +60,7 @@ else
     else
         echo "tester: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
         bd update $STORY_ID --set-metadata test_status="branch_missing"
-        bd update $STORY_ID --status=open --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
+        bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$RIG/sdlc-discipline.worker"
         gc runtime drain-ack
         exit
     fi
@@ -135,7 +135,7 @@ bd update $STORY_ID \
   --set-metadata gate.advisories="$GATE_ADVISORIES" \
   --set-metadata "tester.completed_at=$(date -Iseconds)" \
   --set-metadata current_step="reviewer"
-bd update $STORY_ID --status=open --set-metadata gc.routed_to="$REVIEWER_TARGET"
+bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$REVIEWER_TARGET"
 gc runtime drain-ack
 exit
 ```
@@ -169,7 +169,7 @@ bd update $STORY_ID \
   --set-metadata test_failure_summary="<one-line>" \
   --set-metadata test_resolution_attempts="<n>" \
   --set-metadata "tester.completed_at=$(date -Iseconds)"
-bd update $STORY_ID --status=open --set-metadata gc.routed_to="$WORKER_TARGET"
+bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$WORKER_TARGET"
 gc runtime drain-ack
 exit
 ```
