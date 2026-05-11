@@ -179,6 +179,8 @@ Route to tester. The full chain re-walks: tester re-runs tests against the rebas
 
 ```bash
 bd update $STORY_ID \
+  --status=open \
+  --assignee "" \
   --set-metadata "worker.completed_at=$(date -Iseconds)" \
   --set-metadata "gc.routed_to=${GC_RIG}/sdlc-discipline.tester" \
   --notes "rebase iteration $MERGE_FAILURE_COUNT complete; routed to tester"

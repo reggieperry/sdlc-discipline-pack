@@ -731,7 +731,7 @@ at min=0 and the chain would stall.
 ```bash
 RIG="${GC_RIG:-csv2json}"
 TESTER_TARGET="$RIG/sdlc-discipline.tester"
-bd update {{story_id}} --status=open --set-metadata gc.routed_to="$TESTER_TARGET"
+bd update {{story_id}} --status=open --assignee "" --set-metadata gc.routed_to="$TESTER_TARGET"
 ```
 
 **6. Drain and exit:**

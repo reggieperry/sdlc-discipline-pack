@@ -165,7 +165,7 @@ bd update $STORY_ID \
 # Route to finalizer pool — gc.routed_to ONLY, never --assignee. The
 # supervisor's default scale-check filters --unassigned; an assigned
 # bead is invisible to the pool reconciler and the chain stalls.
-bd update $STORY_ID --status=open --set-metadata gc.routed_to="$FINALIZER_TARGET"
+bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$FINALIZER_TARGET"
 
 gc runtime drain-ack
 exit
