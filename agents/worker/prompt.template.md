@@ -52,6 +52,8 @@ MERGE_FAILURE_COUNT=$(bd show $STORY_ID --json | jq -r '.[0].metadata.merge_fail
 
 **If `MERGE_FAILURE_COUNT > 0`: you are in rebase-iteration mode.** Do not load the formula. Do not write a new plan. The branch, the worktree, and the implementation already exist on origin; your job is to bring them up to date with the target branch, resolve the conflicts the finalizer detected, re-run tests, and force-push. Then route to the tester pool so the full chain re-walks against the refreshed branch.
 
+**Placeholder convention.** Throughout the bash blocks below, angle-bracketed strings like `<module>`, `<name>`, `<describe the specific collision>` are placeholders — they are not literal arguments and must be replaced with concrete values before running. Bash blocks that use real environment variables (e.g., `"$BRANCH"`, `"$RIG_ROOT"`) are executable as-is; bash blocks containing `<…>` need substitution from the situation at hand. When in doubt, the rule is: angle brackets = read and replace; dollar-sign or curly-brace = executable.
+
 ### Rebase-iteration protocol
 
 Read the conflict context the finalizer recorded:
@@ -97,15 +99,18 @@ Step 3 — resolve each conflict. Read both sides of every conflict marker caref
 
 You must NOT unilaterally rename a public type, function, or variable to resolve a semantic conflict. "Public" means: any name exported from a module's surface that other files in the rig import.
 
-Test for it before attempting the rename. In this block `<module>` and `<name>` are placeholders you fill in based on the specific conflict you're examining (e.g., `from elder_trading_system.core.state import BudgetExceeded`):
+Test for it before attempting the rename. Substitute the actual import path and symbol from the conflict you're examining.
+
+Worked example — if you've identified that the conflict involves `BudgetExceeded` exported from `core.state`:
 
 ```bash
-# Replace <module> and <name> with the actual import path and symbol.
-# If grep returns matches outside your own worktree, the name is in use
-# elsewhere — renaming it would break those consumers.
-grep -r "from <module> import <name>" "$RIG_ROOT" --include="*.py" \
+grep -r "from elder_trading_system.core.state import BudgetExceeded" "$RIG_ROOT" --include="*.py" \
     | grep -v "$WORKTREE" | head -5
 ```
+
+The general pattern (replace `<module>` and `<name>` with concrete values from the conflict): `grep -r "from <module> import <name>" "$RIG_ROOT" --include="*.py" | grep -v "$WORKTREE" | head -5`.
+
+If grep returns matches outside your own worktree, the name is in use elsewhere — renaming it would break those consumers.
 
 If the conflict requires renaming such a name, stop and escalate. Substitute a concrete `<reason>` describing the specific collision (which name, which module, which consumers):
 
@@ -128,10 +133,16 @@ The chain stops cleanly. A human reviews the architectural collision, decides on
 
 ### Continue the rebase
 
-After resolving each conflict (within the gate), continue:
+After resolving each conflict (within the gate), stage every file that now reads clean and continue. `git diff --name-only --diff-filter=U` lists paths still marked unmerged; the goal is to drive that list to empty before continuing.
 
 ```bash
-git add <resolved-files>
+# Confirm every conflict is resolved (this should print nothing):
+git diff --name-only --diff-filter=U
+
+# Stage the files you just edited. The `-u` form stages tracked-file
+# updates only — safer than `-A` if your editor created any noise.
+git add -u
+
 git rebase --continue
 ```
 
