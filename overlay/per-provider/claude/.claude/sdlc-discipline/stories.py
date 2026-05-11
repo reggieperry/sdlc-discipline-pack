@@ -432,7 +432,10 @@ def build_graph_plan(
     for s in selected:
         for dep in s.get("deps") or []:
             if dep in selected_ids or dep in by_id:
-                edges.append({"from_key": dep, "to_key": s["story_id"], "type": "blocks"})
+                # bd "blocks" edge convention: from_key is the BLOCKED bead,
+                # to_key is the BLOCKER. A story with deps=[X] is BLOCKED BY X,
+                # so the edge is {from_key: story, to_key: X}.
+                edges.append({"from_key": s["story_id"], "to_key": dep, "type": "blocks"})
 
     return {
         "commit_message": f"File {len(selected)} stories: {', '.join(s['story_id'] for s in selected)}",
