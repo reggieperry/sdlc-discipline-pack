@@ -1,0 +1,5 @@
+[order]
+description = "On bead.closed with metadata.final_state=merged, detect sibling chain beads in the same rig whose PRs are now BEHIND or DIRTY relative to the merged target and route them through the v2.7.0 rebase bounce loop via gc sdlc-stories rebase. Skip if SDLC_WATCHER_ENABLED=false."
+trigger = "event"
+event = "bead.closed"
+exec = "$PACK_DIR/assets/scripts/sdlc-rebase-watcher.sh"
