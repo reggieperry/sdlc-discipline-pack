@@ -32,7 +32,12 @@ PACK="${SDLC_PACK_NAME:-sdlc-discipline}"
 
 # Discover rig name. Operator may set GC_RIG explicitly. If not, walk
 # up from cwd looking for a .beads/ directory; the parent of that is
-# the rig root, and its basename is the rig name.
+# the rig root. Prefer the registered rig name from `gc rig list --json`
+# (keyed by absolute path) because the rig's `name` field can differ
+# from the directory basename — Elder's case is `name = "elder"` for a
+# directory called `elder_trading_system`. Fall back to basename only
+# when the json lookup fails (gc unavailable, jq unavailable, or the
+# rig is not yet registered with the city).
 if [ -n "${GC_RIG:-}" ]; then
     RIG="$GC_RIG"
 else
@@ -44,7 +49,18 @@ else
         echo "sdlc-kickoff: no .beads/ directory found walking up from $(pwd); set GC_RIG explicitly" >&2
         exit 1
     fi
-    RIG=$(basename "$DIR")
+    RIG=""
+    if command -v gc >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        # Resolve symlinks so `gc rig list`'s absolute path comparison matches
+        # rig roots discovered via cwd walking when either side is a symlink.
+        ABS_DIR=$(cd "$DIR" && pwd -P)
+        RIG=$(gc rig list --json 2>/dev/null \
+            | jq -r --arg p "$ABS_DIR" '.rigs[] | select(.path == $p) | .name' \
+            | head -1)
+    fi
+    if [ -z "$RIG" ] || [ "$RIG" = "null" ]; then
+        RIG=$(basename "$DIR")
+    fi
 fi
 
 # Verify the story bead exists. A wrong bead ID fails fast here before
