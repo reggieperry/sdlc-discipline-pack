@@ -94,9 +94,41 @@ def run_ruff(root: Path) -> Counter:
 
 _MYPY_LINE = re.compile(r"^(?P<path>[^:]+?):\d+:.*?error:.*?\[(?P<code>[^\]]+)\]\s*$")
 
+# mypy emits semantically-equivalent codes whose exact spelling depends on
+# tree state (whether an import is resolvable, whether a stub package is
+# installed in the current worktree, etc.). The per-(file, code) identity
+# model in this gate sees a code flip as "lost N errors of code X, gained
+# N errors of code Y" on the same line — a false-positive block. The
+# normalization map collapses known-equivalent codes to a canonical key
+# so the diff sees no net change when the only difference is which
+# spelling mypy chose.
+#
+# Each entry is conservative: only codes that fire on the same underlying
+# defect class for the same line. Codes that look related but actually
+# distinguish different defects (e.g. `import-not-found` vs
+# `import-untyped` — module-missing vs stub-missing) are NOT collapsed.
+_MYPY_CODE_ALIASES: dict[str, str] = {
+    # mypy 2.x split [import] into more specific subcodes. Whether a
+    # given site fires as the parent or the subcode depends on tree
+    # state (e.g. is the test's import target on the path when mypy
+    # walks this worktree?). Hit on Elder REFACTOR-001 tester
+    # 2026-05-11: same line, baseline=`[import]`, branch=`[import-not-found]`.
+    "import-not-found": "import",
+}
+
+
+def _normalize_mypy_code(code: str) -> str:
+    """Collapse equivalent mypy codes to a canonical key for diff identity."""
+    return _MYPY_CODE_ALIASES.get(code, code)
+
 
 def run_mypy(root: Path) -> Counter:
-    """Run mypy and parse the [error-code] suffix. Returns Counter[(file, code)] keyed by repo-relative paths."""
+    """Run mypy and parse the [error-code] suffix. Returns Counter[(file, code)] keyed by repo-relative paths.
+
+    Applies _normalize_mypy_code to each captured code so tree-state-dependent
+    code spellings (e.g. [import] vs [import-not-found]) collapse to a
+    canonical key. See _MYPY_CODE_ALIASES for the conservative alias list.
+    """
     proc = subprocess.run(
         ["uv", "run", "mypy", ".", "--show-error-codes", "--no-error-summary"],
         capture_output=True,
@@ -107,7 +139,8 @@ def run_mypy(root: Path) -> Counter:
     for line in proc.stdout.splitlines():
         m = _MYPY_LINE.match(line)
         if m:
-            counter[(_rel(m.group("path"), root), m.group("code"))] += 1
+            code = _normalize_mypy_code(m.group("code"))
+            counter[(_rel(m.group("path"), root), code)] += 1
     return counter
 
 
@@ -383,7 +416,16 @@ def cmd_diff(args: argparse.Namespace) -> None:
 
     baseline_sha = (base_dir / "sha.txt").read_text().strip()
     baseline_ruff = _deserialize(json.loads((base_dir / "ruff.json").read_text()))
-    baseline_mypy = _deserialize(json.loads((base_dir / "mypy.json").read_text()))
+    # Re-normalize mypy codes on load. Pre-v2.9.2 baselines may carry
+    # un-normalized codes (e.g. raw `import-not-found`); the branch counter
+    # is normalized at run_mypy time. Without re-normalizing the baseline,
+    # the identity comparison sees a code-rename and flags a false-positive
+    # regression. Post-v2.9.2 baselines are already normalized so the
+    # re-pass is a no-op for them.
+    baseline_mypy_raw = _deserialize(json.loads((base_dir / "mypy.json").read_text()))
+    baseline_mypy: Counter = Counter()
+    for (file, code), n in baseline_mypy_raw.items():
+        baseline_mypy[(file, _normalize_mypy_code(code))] += n
     # bandit.json is optional — pre-v2.9 baselines lack it. Treat absence as
     # "no baseline findings" so a v2.9 gate against a v2.4-baseline still
     # runs cleanly; the only effect is that bandit anti-weakening compares
