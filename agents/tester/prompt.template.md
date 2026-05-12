@@ -148,7 +148,7 @@ If the verdict was `advisory`, the reviewer reads `gate.advisories` and decides 
 
 For each failure signal — pytest red or a `blocks[]` entry from the gate — diagnose and apply a narrow fix. Discipline:
 
-- **Anti-weakening is mechanical now.** The gate's Check B (suppression count) and Check D (skip markers, lost asserts) catches `# type: ignore`, `# noqa`, `@pytest.mark.skip`, and deleted asserts that the worker added. If you fix a pytest failure by adding any of these, the gate fails on the next round. Do not try; bounce instead.
+- **Anti-weakening is mechanical now.** The gate's Check B (suppression count) and Check D (skip markers, lost asserts) catches `# type: ignore`, `# noqa`, `# nosec`, `@pytest.mark.skip`, and deleted asserts that the worker added. If you fix a pytest failure by adding any of these, the gate fails on the next round. Do not try; bounce instead. Note: `# nosec B603,B607` (comma-separated) is silently broken in bandit; if a suppression is genuinely needed, use the space-separated form `# nosec B603 B607` — but the gate counts both, so adding either still trips anti-weakening.
 - **Stay in scope.** Resolution edits are limited to files the worker's branch already touched (`git diff --name-only $BASELINE_SHA`). The gate's Check A blocks list will name the offending files; if any are outside that set, it is a baseline drift problem, not a worker problem — escalate.
 - **One fix per commit.** Use `chore(test):`, `chore(lint):`, or `chore(types):` per the gate's check label. Do not bundle.
 - **Re-run pytest and the gate after each fix.**

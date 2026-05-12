@@ -3,7 +3,7 @@
 
 Subcommands
 -----------
-baseline   Run ruff, mypy, and the suppression/pytest-weakening scans against
+baseline   Run ruff, mypy, bandit, and the suppression/pytest-weakening scans against
            the current working tree. Caller has typically checked out the
            merge-base SHA in a scratch worktree before invoking. Output is a
            directory of JSON files keyed for diff to consume.
@@ -29,11 +29,19 @@ downgraded to advisories rather than blocks: a worker who moves a class
 from a.py to b.py without changing its error count gets a soft signal
 rather than an automatic bounce.
 
-Suppressions (#type:ignore, #noqa, #pyright:ignore) are tracked
+Suppressions (#type:ignore, #noqa, #pyright:ignore, #nosec) are tracked
 separately. Targeted suppressions count under their specific code keys;
 blanket forms count under a "BLANKET" key. Adding a blanket suppression
 where a targeted one existed registers as a new key, not a count
 preservation, so scope-broadening is caught.
+
+Note on #nosec: bandit 1.9.4 silently treats `# nosec B603,B607`
+(comma-separated rule IDs) as non-matching, while `# nosec B603 B607`
+(space-separated) works correctly. The gate's pattern recognizes both
+forms for anti-weakening accounting — if the worker adds either, it
+counts as a new suppression. The pack's templates and prose direct
+operators to use the space-separated form so the in-source intent
+actually takes effect at bandit-execution time.
 
 Pytest-anti-weakening tracks per-file count of pytest skip/xfail/skipif
 markers (must not increase) and assert keywords (must not decrease per
@@ -74,9 +82,7 @@ def run_ruff(root: Path) -> Counter:
         try:
             findings = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            sys.stderr.write(
-                "sdlc-gate: ruff produced non-JSON output; treating as no findings\n"
-            )
+            sys.stderr.write("sdlc-gate: ruff produced non-JSON output; treating as no findings\n")
             findings = []
     counter: Counter = Counter()
     for f in findings:
@@ -105,6 +111,71 @@ def run_mypy(root: Path) -> Counter:
     return counter
 
 
+def run_bandit(root: Path) -> Counter:
+    """Run bandit with JSON output. Returns Counter[(file, test_id)] keyed by repo-relative paths.
+
+    Invokes via `uvx` so the rig is not required to carry bandit in its dev deps;
+    rigs that have configured `[tool.bandit]` in `pyproject.toml` get their
+    configuration honoured automatically (bandit auto-detects pyproject.toml
+    from the cwd). The exit code is ignored — we only consume the JSON
+    findings list, never bandit's own pass/fail signal.
+
+    Failures to invoke bandit at all (uvx unavailable, network unreachable
+    for the ephemeral install) are not treated as findings — the function
+    returns an empty Counter and logs a one-line note to stderr. Rigs that
+    intentionally opt out of bandit will see zero baseline and zero branch
+    findings, which is a no-op for the differential gate.
+    """
+    # Write JSON to a temp file rather than stdout — `uvx` itself prints a
+    # one-line progress indicator to stdout that contaminates the JSON when
+    # bandit is invoked through it. The `-o` flag has bandit write the
+    # report to a file, which we then read.
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        report_path = Path(tmp.name)
+    try:
+        proc = subprocess.run(
+            [
+                "uvx",
+                "bandit",
+                "-c",
+                "pyproject.toml",
+                "-r",
+                ".",
+                "-f",
+                "json",
+                "-o",
+                str(report_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode not in (0, 1):
+            # 0 = clean; 1 = findings present; anything else is an invocation problem.
+            sys.stderr.write(
+                f"sdlc-gate: bandit invocation returned rc={proc.returncode}; "
+                "treating as no findings\n",
+            )
+            return Counter()
+        counter: Counter = Counter()
+        try:
+            report = json.loads(report_path.read_text() or "{}")
+        except (json.JSONDecodeError, OSError):
+            sys.stderr.write(
+                "sdlc-gate: bandit produced non-JSON output; treating as no findings\n",
+            )
+            return counter
+        for finding in report.get("results", []):
+            path = _rel(finding.get("filename", ""), root)
+            code = finding.get("test_id", "?")
+            counter[(path, code)] += 1
+        return counter
+    finally:
+        report_path.unlink(missing_ok=True)
+
+
 # --- Suppression scan ---------------------------------------------------------
 
 
@@ -129,6 +200,21 @@ _SUPPRESSION_PATTERNS: list[tuple[re.Pattern, callable]] = [
         re.compile(r"#\s*pyright:\s*ignore"),
         lambda m: "pyright:ignore",
     ),
+    # nosec — both forms recognised so workers cannot weaken by suppressing
+    # findings. Space-separated rule IDs work at bandit-execution time;
+    # comma-separated is silently broken in bandit 1.9.4 but the worker
+    # adding either is the act we want to catch.
+    (
+        re.compile(r"#\s*nosec\s+(?P<code>B\d+(?:[ ,]+B\d+)*)\b"),
+        lambda m: f"nosec[{m.group('code').strip()}]",
+    ),
+    (
+        # Blanket: no `:` or word char immediately after (`# nosec:foo` and
+        # `# nosec` followed by alnum aren't blanket forms), AND no
+        # whitespace-then-B-digit (those are the targeted form handled above).
+        re.compile(r"#\s*nosec(?![:\w])(?!\s+B\d)"),
+        lambda m: "nosec[BLANKET]",
+    ),
 ]
 
 
@@ -148,10 +234,7 @@ def _walk_python(root: Path):
         ".git",
     }
     for path in root.rglob("*.py"):
-        if any(
-            part in skip or part.startswith(".")
-            for part in path.relative_to(root).parts[:-1]
-        ):
+        if any(part in skip or part.startswith(".") for part in path.relative_to(root).parts[:-1]):
             continue
         yield path
 
@@ -225,14 +308,14 @@ def cmd_baseline(args: argparse.Namespace) -> None:
     sys.stderr.write(f"sdlc-gate: capturing baseline at {out_dir} (sha={args.sha})\n")
     ruff = run_ruff(root)
     mypy = run_mypy(root)
+    bandit = run_bandit(root)
     suppressions = scan_suppressions(root)
     pytest_w = scan_pytest_weakening(root)
 
     (out_dir / "ruff.json").write_text(json.dumps(_serialize(ruff), indent=2))
     (out_dir / "mypy.json").write_text(json.dumps(_serialize(mypy), indent=2))
-    (out_dir / "suppressions.json").write_text(
-        json.dumps(_serialize(suppressions), indent=2)
-    )
+    (out_dir / "bandit.json").write_text(json.dumps(_serialize(bandit), indent=2))
+    (out_dir / "suppressions.json").write_text(json.dumps(_serialize(suppressions), indent=2))
     (out_dir / "pytest-weakening.json").write_text(json.dumps(pytest_w, indent=2))
     (out_dir / "sha.txt").write_text(args.sha + "\n")
 
@@ -246,6 +329,8 @@ def cmd_baseline(args: argparse.Namespace) -> None:
                 "ruff_keys": len(ruff),
                 "mypy_total": sum(mypy.values()),
                 "mypy_keys": len(mypy),
+                "bandit_total": sum(bandit.values()),
+                "bandit_keys": len(bandit),
                 "suppressions_total": sum(suppressions.values()),
                 "suppressions_keys": len(suppressions),
                 "pytest_skip_total": sum(pytest_w["skips"].values()),
@@ -279,9 +364,7 @@ def _git_rename_map(baseline_sha: str) -> tuple[dict[str, str], set[str]]:
     return rename_map, deleted
 
 
-def _translate(
-    counter: Counter, rename_map: dict[str, str], deleted: set[str]
-) -> Counter:
+def _translate(counter: Counter, rename_map: dict[str, str], deleted: set[str]) -> Counter:
     """Apply rename map to baseline counter; drop entries for deleted files."""
     out: Counter = Counter()
     for (file, code), n in counter.items():
@@ -301,9 +384,15 @@ def cmd_diff(args: argparse.Namespace) -> None:
     baseline_sha = (base_dir / "sha.txt").read_text().strip()
     baseline_ruff = _deserialize(json.loads((base_dir / "ruff.json").read_text()))
     baseline_mypy = _deserialize(json.loads((base_dir / "mypy.json").read_text()))
-    baseline_supp = _deserialize(
-        json.loads((base_dir / "suppressions.json").read_text())
+    # bandit.json is optional — pre-v2.9 baselines lack it. Treat absence as
+    # "no baseline findings" so a v2.9 gate against a v2.4-baseline still
+    # runs cleanly; the only effect is that bandit anti-weakening compares
+    # branch findings against an empty baseline.
+    bandit_path = base_dir / "bandit.json"
+    baseline_bandit = (
+        _deserialize(json.loads(bandit_path.read_text())) if bandit_path.exists() else Counter()
     )
+    baseline_supp = _deserialize(json.loads((base_dir / "suppressions.json").read_text()))
     baseline_pytest = json.loads((base_dir / "pytest-weakening.json").read_text())
 
     rename_map, deleted = _git_rename_map(baseline_sha)
@@ -311,6 +400,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
     root = Path().resolve()
     branch_ruff = run_ruff(root)
     branch_mypy = run_mypy(root)
+    branch_bandit = run_bandit(root)
     branch_supp = scan_suppressions(root)
     branch_pytest = scan_pytest_weakening(root)
 
@@ -346,12 +436,11 @@ def cmd_diff(args: argparse.Namespace) -> None:
         if hard:
             blocks.append({"check": f"A.{label}", "kind": "new_errors", "items": hard})
         if soft:
-            advisories.append(
-                {"check": f"A.{label}", "kind": "relocated_errors", "items": soft}
-            )
+            advisories.append({"check": f"A.{label}", "kind": "relocated_errors", "items": soft})
 
     diff_errors(branch_ruff, baseline_ruff, "ruff")
     diff_errors(branch_mypy, baseline_mypy, "mypy")
+    diff_errors(branch_bandit, baseline_bandit, "bandit")
 
     # --- Check B: suppression-count diff --------------------------------------
 
@@ -368,9 +457,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
 
     deleted_tests = sorted(f for f in deleted if f.startswith("tests/"))
     if deleted_tests:
-        advisories.append(
-            {"check": "C", "kind": "test_deletions", "items": deleted_tests}
-        )
+        advisories.append({"check": "C", "kind": "test_deletions", "items": deleted_tests})
 
     # --- Check D: pytest weakening --------------------------------------------
 
@@ -385,9 +472,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
         if n > base_n:
             new_skips.append({"file": file, "new": n - base_n})
     if new_skips:
-        blocks.append(
-            {"check": "D.skips", "kind": "new_skip_markers", "items": new_skips}
-        )
+        blocks.append({"check": "D.skips", "kind": "new_skip_markers", "items": new_skips})
 
     lost_asserts: list[dict] = []
     for bf, base_n in baseline_pytest["asserts"].items():
@@ -398,9 +483,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
         if n < base_n:
             lost_asserts.append({"file": new_f, "lost": base_n - n})
     if lost_asserts:
-        blocks.append(
-            {"check": "D.asserts", "kind": "lost_assertions", "items": lost_asserts}
-        )
+        blocks.append({"check": "D.asserts", "kind": "lost_assertions", "items": lost_asserts})
 
     # --- Verdict --------------------------------------------------------------
 
@@ -421,6 +504,8 @@ def cmd_diff(args: argparse.Namespace) -> None:
             "ruff_baseline": sum(baseline_ruff.values()),
             "mypy_branch": sum(branch_mypy.values()),
             "mypy_baseline": sum(baseline_mypy.values()),
+            "bandit_branch": sum(branch_bandit.values()),
+            "bandit_baseline": sum(baseline_bandit.values()),
             "suppressions_branch": sum(branch_supp.values()),
             "suppressions_baseline": sum(baseline_supp.values()),
         },
