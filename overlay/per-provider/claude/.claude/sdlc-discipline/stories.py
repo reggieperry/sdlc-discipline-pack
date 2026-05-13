@@ -438,7 +438,12 @@ def build_graph_plan(
     edges = []
     for s in selected:
         for dep in s.get("deps") or []:
-            if dep in selected_ids or dep in by_id:
+            # Only emit edges between stories being filed in THIS batch. Deps on
+            # already-filed stories (in `by_id` but not `selected_ids`) had their
+            # relationships set up at their own file-time; re-emitting the edge
+            # here makes `bd create --graph` error because the dep's key is not
+            # in this plan's nodes ("to key 'X' not found in plan").
+            if dep in selected_ids:
                 # bd "blocks" edge convention: from_key is the BLOCKED bead,
                 # to_key is the BLOCKER. A story with deps=[X] is BLOCKED BY X,
                 # so the edge is {from_key: story, to_key: X}.
@@ -451,16 +456,25 @@ def build_graph_plan(
     }
 
 
+_STORY_KEY_PATTERN = r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+"
+_BEAD_ID_PATTERN = r"[a-z]+-[a-z0-9]+"
+
+
 def parse_bd_create_output(output: str) -> dict[str, str]:
-    """Extract story_id -> bead_id from `bd create --graph` stdout."""
+    """Extract story_id -> bead_id from `bd create --graph` stdout.
+
+    Matches any uppercase-prefix story key (EL-001, VAL-003, REFACTOR-001,
+    STRESS-01, etc.) paired with a lowercase bead id (el-abc123). The
+    original implementation hardcoded `EL-\\d+` and silently dropped
+    every non-EL story key, leaving frontmatter never written back.
+    """
     assigned: dict[str, str] = {}
-    # bd typically prints "Created <bead-id>: <title>" or similar.
-    # We match conservatively on patterns mentioning both prefixes.
     for line in output.splitlines():
-        m = re.search(r"\b(EL-\d+)\b.*?\b([a-z]+-[a-z0-9]+)\b", line)
+        m = re.search(rf"\b({_STORY_KEY_PATTERN})\b.*?\b({_BEAD_ID_PATTERN})\b", line)
         if m:
             assigned[m.group(1)] = m.group(2)
-        m2 = re.search(r"\b([a-z]+-[a-z0-9]+)\b.*?\b(EL-\d+)\b", line)
+            continue
+        m2 = re.search(rf"\b({_BEAD_ID_PATTERN})\b.*?\b({_STORY_KEY_PATTERN})\b", line)
         if m2 and m2.group(2) not in assigned:
             assigned[m2.group(2)] = m2.group(1)
     return assigned
