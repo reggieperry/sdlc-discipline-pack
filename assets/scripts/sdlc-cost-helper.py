@@ -118,11 +118,15 @@ def find_jsonls_for_phase(
     project_dir = Path.home() / ".claude" / "projects" / encoded
     if not project_dir.is_dir():
         return []
-    # Allow a generous slop (60s) so JSONL files whose mtime is just outside
-    # the bead's recorded start/completion still match — the bead's timestamps
-    # come from the agent's bd update calls, which run after claude has done
-    # some work.
-    slop_s = 60
+    # Allow generous slop (300s) so JSONL files whose mtime trails the bead's
+    # recorded `completed_at` still match. The bead's `completed_at` is set
+    # by the agent's `bd update` near the end of its work, but the JSONL
+    # continues to be appended (and the file system buffer flushed) for tens
+    # of seconds afterward as the session cleans up. Empirically observed
+    # mtimes ~90s past completed_at; 300s keeps a comfortable margin without
+    # false-matching adjacent sessions (which on a pool with idle_timeout=30m
+    # are typically many minutes apart).
+    slop_s = 300
     out: list[Path] = []
     for jsonl in project_dir.glob("*.jsonl"):
         try:

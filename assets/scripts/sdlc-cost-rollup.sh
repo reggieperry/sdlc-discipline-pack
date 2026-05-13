@@ -32,10 +32,25 @@ CSV="$CITY_ROOT/cost_history.csv"
 # No bead ID → nothing to do. Order may fire for non-bead events.
 [ -z "$BEAD_ID" ] && exit 0
 
-# Read the closed bead. If bd can't find it, skip silently — the bead may
-# already be reaped or the event subject may be a non-bead identifier.
-BEAD_JSON=$(bd show "$BEAD_ID" --json 2>/dev/null || true)
+# Read the closed bead. Beads live in per-rig bead stores; plain `bd show`
+# from the city root will fail with an error-shape JSON for rig beads. When
+# the order trigger sets GC_RIG, route through `gc bd --rig <rig>` so we
+# read the right store; otherwise fall back to plain `bd` for city-level
+# beads (cooldown trackers, etc.).
+if [ -n "${GC_RIG:-}" ] && [ "$GC_RIG" != "-" ]; then
+  BEAD_JSON=$(gc bd --rig "$GC_RIG" show "$BEAD_ID" --json 2>/dev/null || true)
+else
+  BEAD_JSON=$(bd show "$BEAD_ID" --json 2>/dev/null || true)
+fi
 [ -z "$BEAD_JSON" ] && exit 0
+
+# Defend against bd returning an error-shape object ({"error": "..."}) rather
+# than the expected array of bead records. Without this guard, the next jq
+# `.[0]` index would crash with "Cannot index object with number" and the
+# script would exit nonzero before any row was written.
+if ! echo "$BEAD_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  exit 0
+fi
 
 # Extract metadata. We're interested in phase beads — beads whose metadata
 # names a phase (planner, implementor, tester, reviewer, documenter). For
@@ -43,6 +58,10 @@ BEAD_JSON=$(bd show "$BEAD_ID" --json 2>/dev/null || true)
 # emit a "story_close" row marking the chain's terminal close time.
 METADATA=$(echo "$BEAD_JSON" | jq -r '.[0].metadata // {}')
 TITLE=$(echo "$BEAD_JSON" | jq -r '.[0].title // ""')
+# Prefer the bead's recorded close time over `now` so live rollup and replay
+# both produce timestamps anchored to the event the row represents. Falls
+# back to `date -Iseconds` when the field is missing.
+BEAD_CLOSED_AT=$(echo "$BEAD_JSON" | jq -r '.[0].closed_at // .[0].updated_at // empty')
 
 # Try each phase name; emit one row if a phase's session_id is present.
 emit_row() {
@@ -67,7 +86,8 @@ emit_row() {
     echo "timestamp,story_id,phase,session_id,duration_seconds,cost_usd,rig" > "$CSV"
   fi
 
-  echo "$(date -Iseconds),$story_id,$phase,$session_id,$duration_seconds,${cost_usd:-0},$rig" >> "$CSV"
+  local row_timestamp="${BEAD_CLOSED_AT:-$(date -Iseconds)}"
+  echo "$row_timestamp,$story_id,$phase,$session_id,$duration_seconds,${cost_usd:-0},$rig" >> "$CSV"
 }
 
 STORY_ID=$(echo "$METADATA" | jq -r '.story_id // empty')
