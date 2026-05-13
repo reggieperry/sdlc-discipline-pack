@@ -87,5 +87,6 @@ bd update "$STORY_ID" \
     >/dev/null
 
 echo "sdlc-kickoff: done. Pool reconciler will spawn a worker on its next tick."
-echo "  Watch progress:  bash scripts/sdlc-watch.sh $STORY_ID"
+SCRIPT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
+echo "  Watch progress:  sh $SCRIPT_DIR/assets/scripts/sdlc-watch.sh $STORY_ID"
 echo "  Bead state:      bd show $STORY_ID --json | jq '.[0].metadata'"
