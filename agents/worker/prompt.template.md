@@ -83,11 +83,20 @@ git checkout "$BRANCH"
 git reset --hard "origin/$BRANCH"   # discard any stale local state
 ```
 
-Step 2 — attempt the rebase:
+Step 2 — capture pre-rebase signals, then attempt the rebase. The signals snapshot is what the post-rebase gate compares against, so it must be captured before HEAD is rewritten.
 
 ```bash
+# Snapshot the pre-rebase architectural signals.
+RIG_CONFIG=".claude/rules/project/architecture.toml"
+PRE_BASE=$(git merge-base HEAD "origin/$TARGET")
+PRE_REBASE_HEAD=$(git rev-parse HEAD)
+PRE_SIGNALS=$(python3 "$RIG_PACK/assets/scripts/sdlc-architectural-signals.py" \
+  "$PRE_BASE" "$PRE_REBASE_HEAD" --rig-config "$RIG_CONFIG" | jq -c '.signals')
+
 git rebase "origin/$TARGET"
 ```
+
+`$RIG_PACK` is the absolute path to this pack inside the rig's tree. Resolve it from your env or by walking up from your `work_dir`.
 
 Step 3 — resolve each conflict. Read both sides of every conflict marker carefully. There are two patterns to recognize:
 
@@ -95,41 +104,7 @@ Step 3 — resolve each conflict. Read both sides of every conflict marker caref
 
 - **Semantic conflict** — your code references a type, function, or name whose meaning or shape has changed on the target branch. Examples: a Protocol's signature has grown a new required argument; a class with the same name was added to another module; a public type's fields were renamed. Tests will surface these even after a clean textual merge.
 
-### Rename gate — when to escalate instead of resolve
-
-You must NOT unilaterally rename a public type, function, or variable to resolve a semantic conflict. "Public" means: any name exported from a module's surface that other files in the rig import.
-
-Test for it before attempting the rename. Substitute the actual import path and symbol from the conflict you're examining.
-
-Worked example — if you've identified that the conflict involves `BudgetExceeded` exported from `core.state`:
-
-```bash
-grep -r "from elder_trading_system.core.state import BudgetExceeded" "$RIG_ROOT" --include="*.py" \
-    | grep -v "$WORKTREE" | head -5
-```
-
-The general pattern (replace `<module>` and `<name>` with concrete values from the conflict): `grep -r "from <module> import <name>" "$RIG_ROOT" --include="*.py" | grep -v "$WORKTREE" | head -5`.
-
-If grep returns matches outside your own worktree, the name is in use elsewhere — renaming it would break those consumers.
-
-If the conflict requires renaming such a name, stop and escalate. Substitute a concrete `<reason>` describing the specific collision (which name, which module, which consumers):
-
-```bash
-REASON="rebase conflict requires renaming public type; details: <describe the specific collision>"
-bd update $STORY_ID \
-  --set-metadata requires_human_decision=true \
-  --set-metadata "human_decision_reason=$REASON" \
-  --set-metadata "gc.routed_to=" \
-  --status=escalated --notes "rebase blocked: rename of public type required"
-WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
-gc mail send "$WITNESS_TARGET" -s "ESCALATION: $STORY_ID — rebase requires public-type rename [HIGH]" \
-  -m "Branch: $BRANCH. Conflict in $CONFLICT_FILES. $REASON"
-git rebase --abort 2>/dev/null || true
-gc runtime drain-ack
-exit
-```
-
-The chain stops cleanly. A human reviews the architectural collision, decides on the rename (or restructure), and either resumes the chain manually or files a follow-up story.
+Resolve conflicts however the rebase requires — including renames inside your own scope. The post-rebase signals gate (below) is what determines whether your resolution stayed within your authority; it fires only when the resolution introduces a new Signal B (Protocol signature), C (frozen-dataclass field), or E (public-name removal without rename) that was not present pre-rebase. Pure structure-preserving renames pass through.
 
 ### Continue the rebase
 
@@ -148,6 +123,43 @@ git rebase --continue
 
 If new conflicts appear, repeat resolution. The rebase walks each of your commits in turn.
 
+### Rebase signals gate — escalate if architectural signals appeared
+
+Now that the rebase is complete, compare the post-rebase architectural signals against the pre-rebase snapshot captured in Step 2. If new Signal B, C, or E appears that was not present pre-rebase, your conflict resolution introduced architectural change beyond the rebase's scope — escalate.
+
+```bash
+POST_BASE=$(git merge-base HEAD "origin/$TARGET")
+POST_SIGNALS=$(python3 "$RIG_PACK/assets/scripts/sdlc-architectural-signals.py" \
+  "$POST_BASE" HEAD --rig-config "$RIG_CONFIG" | jq -c '.signals')
+
+NEW_BCE=$(jq -nc --argjson pre "$PRE_SIGNALS" --argjson post "$POST_SIGNALS" \
+  '$post - $pre | map(select(. == "B" or . == "C" or . == "E"))')
+
+if [ "$NEW_BCE" != "[]" ]; then
+    REASON="rebase resolution introduced architectural signals not present pre-rebase: $NEW_BCE"
+    bd update $STORY_ID \
+      --set-metadata requires_human_decision=true \
+      --set-metadata "human_decision_reason=$REASON" \
+      --set-metadata "gc.routed_to=" \
+      --status=escalated --notes "rebase blocked: $REASON"
+    WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
+    gc mail send "$WITNESS_TARGET" -s "ESCALATION: $STORY_ID — rebase introduced architectural signals [HIGH]" \
+      -m "Branch: $BRANCH. New signals: $NEW_BCE. $REASON"
+    gc runtime drain-ack
+    exit
+fi
+```
+
+The three gating signals describe architectural changes that should not enter the codebase through a rebase-resolution path:
+
+- **Signal B** — Protocol method signature changed: the resolution moved a `@runtime_checkable Protocol` method beyond a simple addition.
+- **Signal C** — frozen-dataclass field removed: a domain entity lost a field during resolution.
+- **Signal E** — public name removed without rename: pure deletion of an exported name (renames where the script's heuristic detects an added equivalent do not fire E).
+
+Other signals (A — sensitive file delta; D — layer crossing; F — assertion regression) describe properties of the diff but do not gate the rebase. The reviewer phase surfaces them on the merge-readiness check regardless.
+
+The signals gate replaces the v2.7.0 grep-based rename gate (which fired on any public-name change in another module, false-positive-prone on cosmetic renames). The new gate is detective rather than preventive: resolve the rebase as needed, then check at the end whether the resolution stayed within bounds. Pure renames now pass through cleanly; architectural drift still escalates.
+
 ### Verify after rebase
 
 The differential gate's baseline is now the new `git merge-base HEAD origin/$TARGET` — automatic. Your post-rebase code must not introduce new ruff/mypy errors or reduce assertion counts vs. that fresh baseline.
@@ -161,7 +173,7 @@ uv run mypy . 2>&1 | tail -5
 
 # Full test suite. If any tests fail, the rebase exposed a semantic issue —
 # treat it like any other failing-test cycle: read the failure, fix the
-# code (subject to the rename gate), re-run.
+# code (subject to the rebase signals gate above), re-run.
 uv run pytest tests/ -v 2>&1 | tail -10
 ```
 
