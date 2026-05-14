@@ -1,0 +1,5 @@
+[order]
+description = "Periodic scan — find chain beads with final_state=pr_open_for_human AND review_recommendation=review_encouraged, scan their PR comments for NACK/LGTM-AUTO overrides, and merge if past the configured delay window with no outstanding objection. Implements the delayed-merge tier of the three-tier reviewer recommendation introduced in v2.10.0."
+trigger = "cooldown"
+interval = "30m"
+exec = "$PACK_DIR/assets/scripts/sdlc-delayed-merge.sh"
