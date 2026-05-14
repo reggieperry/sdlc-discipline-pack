@@ -297,19 +297,17 @@ Useful when a normally-glance-merged rig has a sensitive story that warrants hum
 
 ## The glance rubric
 
-Seven binary checks (`assets/scripts/sdlc-glance-rubric.sh`):
+Five binary checks (`assets/scripts/sdlc-glance-rubric.sh`):
 
 | ID | Check |
 |---|---|
 | R1 | `metadata.test_status == "green"` |
 | R2 | `metadata.review_verdict == "pass"` |
 | R3 | All CI checks on the PR are green (auto-pass when no CI) |
-| R4 | Diff size ≤ 200 LOC across ≤ 10 files |
 | R5 | No undeclared sensitive-file edits |
-| R6 | All acceptance criteria are addressed per the review |
 | R7 | PR is `mergeable: CLEAN` |
 
-R4's thresholds are tunable: `SDLC_GLANCE_LOC_MAX` (default 200), `SDLC_GLANCE_FILES_MAX` (default 10).
+R4 (LOC cap) and R6 (acceptance criteria) were removed in v2.10.0: the architectural-signals script below carries the risk-detection load that LOC was a proxy for, and R2 already encodes whether acceptance criteria were addressed.
 
 ## Architectural signals (v2.10.0)
 
