@@ -204,39 +204,80 @@ fi
 
 ## Auto-merge gate
 
-The glance-merge rubric is a per-pack script that emits a markdown checklist. The flag-precedence rule applies: per-bead `metadata.glance_merge` overrides the rig env default `SDLC_GLANCE_MERGE_DEFAULT`.
+The merge decision is a function of three inputs:
+
+1. **Auto-merge toggle** — per-bead `metadata.glance_merge` overrides the rig env default `SDLC_GLANCE_MERGE_DEFAULT`. When `false`, the bead always parks; the recommendation tier is not consulted.
+2. **Reviewer recommendation** — `metadata.review_recommendation` set by the reviewer phase (story 3 of v2.10.0). Three values: `glance_merge`, `review_encouraged`, `human_required`. Drives which tier the PR routes to.
+3. **Safety floor** — the rubric at `$RIG_PACK/assets/scripts/sdlc-glance-rubric.sh`. A hard gate: a rubric failure parks the PR regardless of recommendation.
+
+The tier outcomes:
+
+| Toggle | Recommendation | Rubric | Outcome |
+|---|---|---|---|
+| `false` (Mode B) | any | not run | park (`final_state=pr_open_for_human`) |
+| `true` | `glance_merge` | pass | merge immediately (`final_state=merged`) |
+| `true` | `review_encouraged` | pass | park (`final_state=pr_open_for_human`); the delayed-merge order picks it up |
+| `true` | `human_required` | pass | park (`final_state=pr_open_for_human`) |
+| `true` | any | fail | park (`final_state=pr_open_for_human`) — safety floor wins |
 
 ```bash
 GLANCE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.glance_merge // empty')
 [ -z "$GLANCE" ] && GLANCE="${SDLC_GLANCE_MERGE_DEFAULT:-false}"
 
-if [ "$GLANCE" = "true" ] && [ -n "$PR_NUMBER" ]; then
+RECOMMENDATION=$(bd show $STORY_ID --json | jq -r '.[0].metadata.review_recommendation // empty')
+[ -z "$RECOMMENDATION" ] && RECOMMENDATION="human_required"
+
+if [ "$GLANCE" != "true" ] || [ -z "$PR_NUMBER" ]; then
+    # Auto-merge disabled (Mode B) or no PR — park unconditionally.
+    bd update $STORY_ID \
+      --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+      --set-metadata final_state="pr_open_for_human"
+    bd close $STORY_ID --reason "shipped to $PR_URL (queued for human review; auto-merge disabled)"
+else
     RUBRIC_OUT=$(mktemp)
     if bash "$RIG_PACK/assets/scripts/sdlc-glance-rubric.sh" "$STORY_ID" > "$RUBRIC_OUT"; then
+        # Safety floor passed — the recommendation decides the tier.
         gh pr comment "$PR_NUMBER" --body-file "$RUBRIC_OUT"
-        gh pr merge "$PR_NUMBER" --squash --delete-branch
-        bd update $STORY_ID \
-          --set-metadata pr_merged=true \
-          --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
-          --set-metadata final_state="merged"
-        bd close $STORY_ID --reason "shipped: $PR_URL (auto-merged via glance gate)"
+        case "$RECOMMENDATION" in
+            glance_merge)
+                gh pr merge "$PR_NUMBER" --squash --delete-branch
+                bd update $STORY_ID \
+                  --set-metadata pr_merged=true \
+                  --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+                  --set-metadata final_state="merged"
+                bd close $STORY_ID --reason "shipped: $PR_URL (auto-merged; recommendation=glance_merge)"
+                ;;
+            review_encouraged)
+                bd update $STORY_ID \
+                  --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+                  --set-metadata final_state="pr_open_for_human"
+                bd close $STORY_ID --reason "shipped to $PR_URL (delayed-merge tier; recommendation=review_encouraged)"
+                ;;
+            *)
+                # human_required, MISSING_CONFIG-driven, or unrecognized — park.
+                bd update $STORY_ID \
+                  --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+                  --set-metadata final_state="pr_open_for_human"
+                bd close $STORY_ID --reason "shipped to $PR_URL (human review required; recommendation=$RECOMMENDATION)"
+                ;;
+        esac
     else
+        # Safety floor failed — park regardless of recommendation.
         gh pr comment "$PR_NUMBER" --body-file "$RUBRIC_OUT"
         bd update $STORY_ID \
           --set-metadata pr_glance_failed=true \
           --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
           --set-metadata final_state="pr_open_for_human"
-        bd close $STORY_ID --reason "shipped to $PR_URL (queued for human review): $(cat "$RUBRIC_OUT" | head -3)"
+        bd close $STORY_ID --reason "shipped to $PR_URL (safety floor failed; queued for human review): $(cat "$RUBRIC_OUT" | head -3)"
     fi
-else
-    bd update $STORY_ID \
-      --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
-      --set-metadata final_state="pr_open_for_human"
-    bd close $STORY_ID --reason "shipped to $PR_URL (queued for human review)"
 fi
 ```
 
 `$RIG_PACK` is the absolute path to this pack inside the rig's tree (e.g., `<rig>/packs/sdlc-discipline`). Resolve it from your env or by walking up from your `work_dir`.
+
+Missing `review_recommendation` (rig hasn't deployed v2.10.0 yet, or the reviewer phase crashed) defaults to `human_required` via the `[ -z "$RECOMMENDATION" ] && RECOMMENDATION="human_required"` guard — the conservative tier.
+
+The `review_encouraged` tier hands off to `orders/sdlc-delayed-merge.toml`, which runs on a 30m cooldown and decides whether to merge based on PR-comment overrides (`LGTM-AUTO`, `MERGE-NOW`) or the configured delay window (default 24h). See README's "Delayed-merge tier" section.
 
 ## Close out
 

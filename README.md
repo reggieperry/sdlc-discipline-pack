@@ -268,9 +268,14 @@ SDLC_OPEN_PR_DEFAULT = "true"
 SDLC_GLANCE_MERGE_DEFAULT = "false"
 ```
 
-### Mode C — Solo, PR + auto-merge
+### Mode C — Solo, PR + recommendation-driven merge
 
-Branch is pushed, PR is opened, the glance rubric runs, and the finalizer auto-merges if the rubric passes.
+Branch is pushed, PR is opened, the glance rubric runs, and the finalizer routes the PR by the reviewer's recommendation (v2.10.0):
+
+- `glance_merge` recommendation + rubric pass → merge immediately
+- `review_encouraged` + rubric pass → park; the delayed-merge order auto-merges after the configured window (default 24h) unless an objection comment is posted
+- `human_required` (any signal fired, or rig has no `architecture.toml`) → park indefinitely
+- rubric fail (any recommendation) → park
 
 ```toml
 [[rigs.patches]]
@@ -280,7 +285,7 @@ SDLC_OPEN_PR_DEFAULT = "true"
 SDLC_GLANCE_MERGE_DEFAULT = "true"
 ```
 
-The env vars are read by the finalizer pool, which owns the merge gate. Until v1.x, the documenter held this responsibility — that boundary moved in v2.0.
+The env vars are read by the finalizer pool, which owns the merge gate. Until v1.x, the documenter held this responsibility — that boundary moved in v2.0. The three-tier recommendation logic was added in v2.10.0; pre-v2.10.0 rigs (no `architecture.toml`, no `review_recommendation` metadata) default to `human_required` and park.
 
 ## Per-story overrides
 
