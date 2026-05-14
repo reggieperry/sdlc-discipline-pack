@@ -311,6 +311,20 @@ Seven binary checks (`assets/scripts/sdlc-glance-rubric.sh`):
 
 R4's thresholds are tunable: `SDLC_GLANCE_LOC_MAX` (default 200), `SDLC_GLANCE_FILES_MAX` (default 10).
 
+## Architectural signals (v2.10.0)
+
+`assets/scripts/sdlc-architectural-signals.py` augments the rubric with AST-driven detection of architectural changes that should never auto-merge regardless of diff size. Six signals (sensitive-file delta, Protocol signature delta, frozen-dataclass field delta, layer crossing, public-name removal, assertion-count regression); any one fires → `recommendation = "human_required"`.
+
+Rigs declare their architectural shape in `.claude/rules/project/architecture.toml`:
+
+```toml
+sensitive_files     = ["risk_parameters.py", "agents/risk_agent.py", "indicators/*.py"]
+domain_model_files  = ["core/state.py"]
+protocol_modules    = ["core/agent.py"]
+```
+
+Without the file, the signals script defaults every PR to `human_required` — a rig that hasn't declared its shape can't be auto-merged safely. The full format spec lives in `overlay/per-provider/claude/.claude/rules/architecture-config.md` (auto-loads when the rig edits its `architecture.toml`).
+
 ## Cost tracking
 
 Each pool agent records `<phase>.session_id` and `<phase>.started_at` at start, `<phase>.completed_at` at end, on the story bead's metadata. The `sdlc-cost-rollup` order watches for `bead.closed` events and appends a row to `<city>/cost_history.csv`:
