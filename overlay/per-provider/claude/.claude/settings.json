@@ -38,11 +38,21 @@
       "Bash(git worktree *)",
       "Bash(git stash *)",
       "Bash(git rm *)",
+      "Bash(git rev-parse *)",
+      "Bash(git merge-base *)",
+      "Bash(git show *)",
+      "Bash(git show-ref *)",
+      "Bash(git remote *)",
       "Bash(gh issue *)",
       "Bash(gh pr *)",
       "Bash(gh api *)",
       "Bash(gh repo *)",
       "Bash(gh run *)",
+      "Bash(bd *)",
+      "Bash(gc *)",
+      "Bash(jq *)",
+      "Bash(python3 *)",
+      "Bash(bash *)",
       "Bash(ls *)",
       "Bash(cat *)",
       "Bash(find *)",
@@ -52,7 +62,14 @@
     ],
     "deny": [
       "Bash(git push -f *)",
-      "Bash(rm -rf *)"
+      "Bash(git push --force origin *)",
+      "Bash(git push --force HEAD*)",
+      "Bash(git reset --hard origin/main)",
+      "Bash(git reset --hard main)",
+      "Bash(git reset --hard origin/master)",
+      "Bash(git reset --hard master)",
+      "Bash(rm -rf *)",
+      "Bash(rm -rf /*)"
     ]
   },
   "awaySummaryEnabled": false
