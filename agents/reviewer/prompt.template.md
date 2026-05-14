@@ -71,6 +71,35 @@ fi
 
 You are now in your per-instance worktree, on the branch the worker pushed.
 
+## Architectural signals (merge protocol)
+
+Before reading the diff, run the signals script to detect architectural changes that determine which merge tier the PR routes to:
+
+```bash
+BASELINE=$(git merge-base HEAD "origin/$TARGET" 2>/dev/null || git merge-base HEAD "$TARGET")
+HEAD_SHA=$(git rev-parse HEAD)
+RIG_CONFIG=".claude/rules/project/architecture.toml"
+SIGNALS_JSON=$(python3 "$RIG_PACK/assets/scripts/sdlc-architectural-signals.py" "$BASELINE" "$HEAD_SHA" --rig-config "$RIG_CONFIG")
+SIGNALS=$(echo "$SIGNALS_JSON" | jq -c '.signals')
+RECOMMENDATION=$(echo "$SIGNALS_JSON" | jq -r '.recommendation')
+```
+
+`$RIG_PACK` is the absolute path to this pack inside the rig's tree (e.g., `<rig>/packs/sdlc-discipline`). Resolve it from your env or by walking up from your `work_dir`.
+
+Set the bead metadata immediately — these fields describe the diff, independent of the eventual review verdict, so a downstream crash does not lose them:
+
+```bash
+bd update $STORY_ID \
+  --set-metadata architectural_signals="$SIGNALS" \
+  --set-metadata review_recommendation="$RECOMMENDATION"
+```
+
+Keep `$SIGNALS_JSON` available — you will render its contents into the review file's "Merge readiness" section.
+
+### Missing rig-config
+
+If the rig has no `.claude/rules/project/architecture.toml`, the script returns `signals=["MISSING_CONFIG"]` and `recommendation="human_required"` and exits 0. This is intentional: a rig without an architectural-shape declaration can't be auto-merged safely. Set the metadata and continue with the review; do not escalate, do not fail the build.
+
 ## What you check
 
 ### Spec coverage (each acceptance criterion)
@@ -123,6 +152,20 @@ Write the review to `reviews/$STORY_ID.md` (in the rig's main repo, not the per-
 2. **[tech-debt]** <file:line> — <description>
 3. **[nit]** <file:line> — <description>
 
+## Merge readiness
+
+Recommendation: **<glance_merge | review_encouraged | human_required>**
+
+Architectural signals: **<none fired | comma-separated letters>**
+
+<For each fired signal, one bullet describing the evidence from $SIGNALS_JSON.details, e.g.:>
+- **A** (sensitive_file): `agents/risk_agent.py` matched glob in rig-config sensitive_files
+- **C** (domain_field_removed): `core/state.py` — `TradeProposal.expected_slippage` removed
+
+Diff stats: <lines_added> added, <lines_removed> removed across <files_changed> files; <"edits existing function bodies" | "pure-additive">.
+
+<One sentence on why this recommendation: which cliff was crossed, or which signal was decisive.>
+
 ## Verdict
 **PASS** — proceed to documenter
 or
@@ -130,6 +173,8 @@ or
 ```
 
 Be specific in findings. "Looks fine" is not a finding. "<file>:<line> — <concrete observation>" is.
+
+The **Merge readiness** section renders the signals JSON for a human reader. Take the values from `$SIGNALS_JSON` captured above; do not re-derive them. The verdict (PASS/FAIL) is separate from the recommendation (glance_merge / review_encouraged / human_required) — a PASS verdict with a `human_required` recommendation means "no blockers, but the PR touches architectural surfaces and should not auto-merge."
 
 ## Commit the review to the feature branch
 
