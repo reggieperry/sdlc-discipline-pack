@@ -35,6 +35,24 @@ Only `@dataclass(frozen=True)` classes are scanned. Non-frozen dataclasses, `att
 
 Only `@runtime_checkable` Protocols are scanned. Plain `typing.Protocol` classes are visible to type-checkers but not to runtime `isinstance` — they're invisible to Signal B unless decorated.
 
+**`numbered_catalogs`** — categories of numbered IDs that workers should resolve from `<CATEGORY>-NEXT` sentinels at plan time. Each category maps to one or more source files (or path globs) and a regex that captures the integer. The worker scans the sources, finds the highest existing integer for the category, and substitutes the sentinel with the next free integer (`max + 1`, or `1` if no matches exist).
+
+The shape differs from the three list-valued fields above. Each category is a TOML table:
+
+```toml
+[numbered_catalogs.STAGE]
+sources = ["docs/elder-invariants.md"]
+content_regex = '^### STAGE-(\d+):'
+
+[numbered_catalogs.MIGRATION]
+sources = ["db/migrations/*.sql"]
+filename_regex = '^db/migrations/(\d{4})_'
+```
+
+`content_regex` matches against each line of every source file; the capturing group must yield an integer. Use this when entries are headings or marked lines in a markdown or text file. `filename_regex` matches against each path resolved from the source globs; the capturing group must yield an integer. Use this when entries are numbered files in a directory (migration files, story IDs, etc.). Exactly one of `content_regex` or `filename_regex` per category.
+
+The worker's resolution procedure is described in `agents/worker/prompt.template.md` (Numbered-catalog ID substitution). The reviewer audits for unsubstituted sentinels in the diff and flags any hit as a blocker.
+
 ## Glob conventions
 
 Entries may be exact paths or shell-style globs:
@@ -77,6 +95,18 @@ domain_model_files = [
 protocol_modules = [
   "core/agent.py",
 ]
+
+[numbered_catalogs.STAGE]
+sources = ["docs/elder-invariants.md"]
+content_regex = '^### STAGE-(\d+):'
+
+[numbered_catalogs.COST]
+sources = ["docs/elder-invariants.md"]
+content_regex = '^### COST-(\d+):'
+
+[numbered_catalogs.MIGRATION]
+sources = ["db/migrations/*.sql"]
+filename_regex = '^db/migrations/(\d{4})_'
 ```
 
 ## Missing-config behavior
