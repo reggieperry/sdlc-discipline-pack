@@ -8,9 +8,14 @@
 #
 # When acting: find sibling chain beads in the same rig that have open PRs
 # against the same target branch. Check each PR's mergeStateStatus via gh.
-# If BEHIND or DIRTY, trigger `gc sdlc-stories rebase <story_id>` — entering
-# the v2.7.0 bounce loop. Mergeable PRs (CLEAN), or PRs whose state is
-# ambiguous (UNKNOWN, BLOCKED), are left alone.
+# If BEHIND, DIRTY, or CONFLICTING, trigger `gc sdlc-stories rebase <story_id>` —
+# entering the v2.7.0 bounce loop. Mergeable PRs (CLEAN), or PRs whose state
+# is ambiguous (UNKNOWN, BLOCKED, HAS_HOOKS, UNSTABLE), are left alone.
+#
+# Note on the human-merge case: this watcher only fires when the chain's
+# finalizer auto-merged (final_state=merged), not when a human manually
+# merged via `gh pr merge`. The companion sweeper (orders/sdlc-stale-pr-sweeper.toml)
+# covers the human-merge case on a 5-minute cooldown.
 #
 # Environment provided by the order trigger:
 #   GC_EVENT_TYPE       e.g. "bead.closed"
@@ -53,9 +58,16 @@ RIG=$(echo "$BEAD_JSON" | jq -r '.[0].metadata.rig // empty')
 TARGET=$(echo "$BEAD_JSON" | jq -r '.[0].metadata.target // "main"')
 
 # Resolve the rig root. GC_RIG_ROOT when the supervisor sets it; otherwise
-# strip the .gc/worktrees suffix from the closing bead's work_dir.
+# strip the .gc/worktrees suffix from the closing bead's work_dir; otherwise
+# look up via `gc rig list --json` from the city root.
 WORK_DIR=$(echo "$BEAD_JSON" | jq -r '.[0].metadata.work_dir // empty')
 RIG_ROOT="${GC_RIG_ROOT:-${WORK_DIR%/.gc/worktrees/*}}"
+if [ -z "$RIG_ROOT" ] || [ ! -d "$RIG_ROOT" ]; then
+    if [ -n "${GC_CITY_ROOT:-}" ] && [ -d "$GC_CITY_ROOT" ]; then
+        RIG_ROOT=$(cd "$GC_CITY_ROOT" && gc rig list --json 2>/dev/null \
+            | jq -r --arg rig "$RIG" '.rigs[] | select(.name == $rig) | .path' 2>/dev/null || true)
+    fi
+fi
 if [ -z "$RIG_ROOT" ] || [ ! -d "$RIG_ROOT" ]; then
     echo "watcher: cannot resolve rig root for bead $BEAD_ID (rig=$RIG); skipping" >&2
     exit 0
@@ -75,7 +87,7 @@ SIBLINGS=$(bd list --status=closed --limit 5000 --json 2>/dev/null \
 
 [ -z "$SIBLINGS" ] && exit 0
 
-echo "watcher: rig $RIG, target $TARGET — bead $BEAD_ID merged; checking siblings" >&2
+echo "watcher: rig=$RIG target=$TARGET — bead $BEAD_ID merged; checking siblings" >&2
 
 # Walk siblings, check each PR's mergeable state, trigger rebase on stale.
 echo "$SIBLINGS" | while IFS= read -r sibling_id; do
@@ -83,6 +95,16 @@ echo "$SIBLINGS" | while IFS= read -r sibling_id; do
 
     SIBLING_JSON=$(bd show "$sibling_id" --json 2>/dev/null || true)
     [ -z "$SIBLING_JSON" ] && continue
+
+    # Dedup: if the sibling raced into rebase between the list query and
+    # this show (status moved closed → open or in_progress), skip. The
+    # outer list filter already excludes non-closed beads, so this is the
+    # belt to the suspenders.
+    SIBLING_STATUS=$(echo "$SIBLING_JSON" | jq -r '.[0].status // empty')
+    if [ "$SIBLING_STATUS" != "closed" ]; then
+        echo "watcher: sibling $sibling_id status=$SIBLING_STATUS (already in rebase iteration); skipping" >&2
+        continue
+    fi
 
     PR_URL=$(echo "$SIBLING_JSON" | jq -r '.[0].metadata.pr_url // empty')
     STORY_ID=$(echo "$SIBLING_JSON" | jq -r '.[0].metadata.story_id // empty')
@@ -105,7 +127,7 @@ echo "$SIBLINGS" | while IFS= read -r sibling_id; do
     [ "$STATE" != "OPEN" ] && continue
 
     case "$MERGEABLE" in
-        BEHIND|DIRTY)
+        BEHIND|DIRTY|CONFLICTING)
             echo "watcher: PR #$PR_NUMBER ($STORY_ID) is $MERGEABLE; triggering rebase via stories.py" >&2
             # Invoke the bridge script directly via the pack's overlay path
             # rather than the `gc sdlc-discipline stories rebase` wrapper.
@@ -117,16 +139,13 @@ echo "$SIBLINGS" | while IFS= read -r sibling_id; do
             # the order trigger.
             cd "$RIG_ROOT" && python3 "$PACK_DIR/overlay/per-provider/claude/.claude/sdlc-discipline/stories.py" rebase "$STORY_ID" >&2 || true
             ;;
-        CLEAN|UNKNOWN|BLOCKED|HAS_HOOKS|UNSTABLE)
-            # CLEAN — no rebase needed.
-            # UNKNOWN/BLOCKED/HAS_HOOKS/UNSTABLE — GitHub is mid-computation
-            # or branch protection is engaged; let the human or the next
-            # event resolve it.
+        CLEAN)
+            echo "watcher: PR #$PR_NUMBER ($STORY_ID) is CLEAN; no rebase needed" >&2
             ;;
-        CONFLICTING)
-            # The PR is already in textual conflict with main on GitHub's
-            # side. A finalizer that runs will discover this too. Leave it
-            # alone here — multiple watchers shouldn't pile on the same bead.
+        UNKNOWN|BLOCKED|HAS_HOOKS|UNSTABLE)
+            # GitHub is mid-computation or branch protection is engaged;
+            # let the sweeper catch this on its next cooldown tick.
+            echo "watcher: PR #$PR_NUMBER ($STORY_ID) is $MERGEABLE; deferring to sweeper" >&2
             ;;
         *)
             echo "watcher: PR #$PR_NUMBER ($STORY_ID) has unknown mergeStateStatus '$MERGEABLE'; skipping" >&2
