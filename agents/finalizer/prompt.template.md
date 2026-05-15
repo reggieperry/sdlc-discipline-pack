@@ -172,27 +172,46 @@ if [ -z "$PR_URL" ] || ! gh pr view "$PR_NUMBER" >/dev/null 2>&1; then
     PLAN_FILE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.plan_file')
     REVIEW_FILE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.review_file')
     FEATURE_DOC=$(bd show $STORY_ID --json | jq -r '.[0].metadata.feature_doc')
+    STORY_FILE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.story_file // empty')
     TEST_SUMMARY=$(bd show $STORY_ID --json | jq -r '.[0].metadata.test_summary // "see CI"')
     PR_TITLE=$(bd show $STORY_ID --json | jq -r '.[0].title')
 
+    # Resolve the rig's GitHub repo URL so the pointers below render as
+    # clickable links. Falls back to bare code-block paths if gh fails.
+    REPO_URL=$(gh repo view --json url -q .url 2>/dev/null || echo "")
+
+    # Helper: render a repo-relative path as a markdown link to that file
+    # on the PR's branch. Empty/null path becomes "_not available_"; missing
+    # REPO_URL degrades to a backtick-wrapped path.
+    link_to_branch() {
+        local path="$1"
+        if [ -z "$path" ] || [ "$path" = "null" ]; then
+            echo "_not available_"
+        elif [ -n "$REPO_URL" ]; then
+            echo "[\`$path\`]($REPO_URL/blob/$BRANCH/$path)"
+        else
+            echo "\`$path\`"
+        fi
+    }
+
     PR_BODY=$(cat <<EOF
 ## Story
-\`bd show $STORY_ID\`
+$(link_to_branch "$STORY_FILE")
 
 ## Summary
 $(head -10 "$FEATURE_DOC" 2>/dev/null | tail -5 || echo "see $FEATURE_DOC")
 
 ## Plan
-\`$PLAN_FILE\`
+$(link_to_branch "$PLAN_FILE")
 
 ## Review
-\`$REVIEW_FILE\` (verdict=pass)
+$(link_to_branch "$REVIEW_FILE") (verdict=pass)
 
 ## Tests
 $TEST_SUMMARY
 
 ## Documentation
-\`$FEATURE_DOC\`
+$(link_to_branch "$FEATURE_DOC")
 EOF
 )
 
