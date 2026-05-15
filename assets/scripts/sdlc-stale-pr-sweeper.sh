@@ -137,12 +137,17 @@ sweep_rig() {
     done
 }
 
-# Loop over each non-HQ, non-suspended rig.
-echo "$RIGS_JSON" | jq -c '.rigs[] | select(.hq == false and .suspended == false)' 2>/dev/null \
-    | while IFS= read -r rig_json; do
-        rig_name=$(echo "$rig_json" | jq -r '.name')
-        rig_path=$(echo "$rig_json" | jq -r '.path')
-        sweep_rig "$rig_name" "$rig_path"
-    done
+# Loop over each non-HQ, non-suspended rig. Capture the filtered JSON first
+# rather than piping directly into the while loop: `set -euo pipefail` is in
+# effect, so a jq parse error on a malformed `gc rig list` payload would kill
+# the script through pipefail. The explicit capture lets `|| true` swallow
+# that case and continue with zero rigs.
+FILTERED_RIGS=$(echo "$RIGS_JSON" | jq -c '.rigs[] | select(.hq == false and .suspended == false)' 2>/dev/null || true)
+echo "$FILTERED_RIGS" | while IFS= read -r rig_json; do
+    [ -z "$rig_json" ] && continue
+    rig_name=$(echo "$rig_json" | jq -r '.name')
+    rig_path=$(echo "$rig_json" | jq -r '.path')
+    sweep_rig "$rig_name" "$rig_path"
+done
 
 exit 0
