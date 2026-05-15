@@ -231,6 +231,22 @@ The rig's `.claude/rules/` directory contains the discipline rules (TDD, Python 
 
 If `CLAUDE.md` declares a sensitive-files list, your plan in step 2 must explicitly state whether the change touches any of them. The `submit-and-exit` step enforces this — handoff blocks if a sensitive file changed without declaration.
 
+## Numbered-catalog ID substitution
+
+If the rig declares `numbered_catalogs` in `.claude/rules/project/architecture.toml` and the story spec contains `<CATEGORY>-NEXT` sentinels (for example `STAGE-NEXT`, `COST-NEXT`, `MIGRATION-NEXT`), resolve each sentinel to the next free integer at plan time, before writing the plan or the implementation.
+
+For each sentinel:
+
+1. Look up the category in `numbered_catalogs.<CATEGORY>`.
+2. Scan the declared sources — apply `content_regex` to each line of every source file, or `filename_regex` to every path matching the source glob; capture the integer in each match.
+3. Compute the next free integer as `max(captured) + 1`, or `1` if no matches exist.
+4. Substitute `<CATEGORY>-NEXT` with `<CATEGORY>-<integer>` everywhere the spec references it: in the plan you write, in the implementation, in any test or doc the change adds.
+5. Note the substitution in the plan's notes section: "`STAGE-NEXT` resolved to `STAGE-014` at plan time; highest existing was `STAGE-013`."
+
+If a sentinel appears in the spec but no matching `numbered_catalogs` entry exists, halt and escalate — the rig's config is incomplete.
+
+Why this matters: two stories planning in parallel will independently see the same "next free integer" if the spec hard-codes it at authoring time, producing ID collisions at merge. Resolving at plan time means the rebase-watcher can reconcile by re-resolving on the rebased branch.
+
 ## Context exhaustion
 
 If your context fills before reaching `submit-and-exit`:

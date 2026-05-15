@@ -135,6 +135,10 @@ A review with any **blocker** fails. A review with only `tech-debt` and `nit` pa
 
 If the diff touches any path on the rig's sensitive-files list (declared in `CLAUDE.md` if present) AND the plan did not declare it under "Sensitive files" — that is an automatic **blocker**. Sensitive-file scope must be explicit.
 
+### Unsubstituted NEXT sentinels
+
+If the diff touches any file declared in `numbered_catalogs.*.sources` (in `.claude/rules/project/architecture.toml`), grep the diff for unsubstituted `\w+-NEXT` markers. Any hit is an automatic **blocker** — the worker was supposed to resolve the sentinel at plan time per `agents/worker/prompt.template.md`'s numbered-catalog discipline. Cite the file:line and the unresolved sentinel.
+
 ## Producing the review
 
 Write the review to `reviews/$STORY_ID.md` (in the rig's main repo, not the per-instance worktree — write via absolute path):
