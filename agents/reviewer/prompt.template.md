@@ -143,7 +143,7 @@ If the diff touches any file declared in `numbered_catalogs.*.sources` (in `.cla
 
 Write the review to `reviews/$STORY_ID.md` (in the rig's main repo, not the per-instance worktree — write via absolute path):
 
-```markdown
+````markdown
 # Review: <story title>
 
 ## Spec coverage
@@ -155,6 +155,28 @@ Write the review to `reviews/$STORY_ID.md` (in the rig's main repo, not the per-
 1. **[blocker]** <file:line> — <description>
 2. **[tech-debt]** <file:line> — <description>
 3. **[nit]** <file:line> — <description>
+
+## Tech-debt items (structured)
+
+<!-- Emit this section ONLY when Findings contains at least one [tech-debt] item.
+     The finalizer's tech-debt-automation hook parses this trailer and files each
+     item as a GitHub issue in the rig's repo. Absence of this section = no issues
+     filed. Omit entirely when no tech-debt items exist. -->
+
+```json tech_debt_trailer
+[
+  {
+    "target_path": "<repo-relative path>",
+    "target_lines": "<single line, line range like '267-282', or 'multiple'>",
+    "severity": "<low | med | high>",
+    "category": "<kebab-case tag — see suggested values below>",
+    "summary": "<one line; becomes the GitHub issue title>",
+    "suggested_fix": "<one-to-two-sentence fix sketch>"
+  }
+]
+```
+
+Each tech-debt finding in the prose Findings list above should have a corresponding entry here. Suggested `category` values (free-text; prefer these for groupability across rigs): `docstring-vs-code`, `stale-state`, `missing-test`, `broadening-suppression`, `scope-drift`, `type-hygiene`, `naming`, `perf`.
 
 ## Merge readiness
 
@@ -174,7 +196,7 @@ Diff stats: <lines_added> added, <lines_removed> removed across <files_changed> 
 **PASS** — proceed to documenter
 or
 **FAIL** — return to worker pool for <short reason>
-```
+````
 
 Be specific in findings. "Looks fine" is not a finding. "<file>:<line> — <concrete observation>" is.
 
