@@ -30,7 +30,7 @@ Bandit catches these mechanically at the tester phase. The rule explains why.
 - `subprocess` with list args, never `shell=True` on untrusted data. (CWE-78, bandit B602–B609)
 - `yaml.safe_load`, not `yaml.load`. (CWE-502, bandit B506)
 - `defusedxml` for untrusted XML, never stdlib `xml`. (CWE-611)
-- `tempfile.mkstemp`, not `tempfile.mktemp`. (CWE-377, bandit B108)
+- `tempfile.mkstemp`, not `tempfile.mktemp`. (CWE-377, bandit B306)
 - SSL verification always on. Never `verify=False`, never `ssl.CERT_NONE`. (CWE-295, bandit B501–B504, B507)
 - No `pickle` for data crossing a trust boundary. Use JSON or msgpack. Arrow IPC for process-pool boundaries within a trust zone. (CWE-502)
 - `assert` is for tests, not production checks. `python -O` strips assertions. Raise an explicit exception instead. (CWE-617, bandit B101)
@@ -39,7 +39,7 @@ Bandit catches these mechanically at the tester phase. The rule explains why.
 ## Cryptography
 
 - Randomness for security: `secrets` module, never `random`. (CWE-330, bandit B311)
-- Hashing for security: SHA-256 or stronger, never MD5 or SHA-1. (CWE-327, bandit B324)
+- Hashing for security: SHA-256 or stronger, never MD5 or SHA-1. (CWE-327, bandit B303 for direct `hashlib.md5/sha1`, B324 for `hashlib.new("md5", ...)`)
 - Token comparison: `secrets.compare_digest`, never `==`. (CWE-208 — timing attack)
 - Password storage: `bcrypt` or `argon2`, never plain hash. (CWE-916)
 
