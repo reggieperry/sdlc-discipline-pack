@@ -360,6 +360,22 @@ Dedup is by exact issue title against existing open `tech-debt`-labeled issues, 
 
 Why GitHub issues rather than chain-runnable beads: tech-debt items vary in actionability, so the capture step (machine-driven, fast) is decoupled from the prosecution step (human-triaged, optional). Patterns observed in the triaged backlog become candidates for future automation rules.
 
+## Operator notification (v2.12)
+
+Closes the operator-poll loop on `human_required` PRs. When the finalizer parks a PR at `final_state=pr_open_for_human`, it invokes `assets/scripts/sdlc-finalizer-notify.sh`, which composes a subject + body and pipes them through `assets/scripts/sdlc-notify.sh`. The notification is opt-in:
+
+```bash
+# Per-rig env, set on the finalizer pool agent's environment
+export SDLC_NOTIFY_RECIPIENT="operator@example.com"
+```
+
+`sdlc-notify.sh` sends via local `msmtp` (which carries its own sender config in `~/.msmtprc`); if `msmtp` is unavailable on the host, the helper logs the would-have-sent subject to stderr and exits 0 — a missing notification substrate must never fail a chain. When `SDLC_NOTIFY_RECIPIENT` is unset, the helper short-circuits before invoking `msmtp`.
+
+Subject format: `[<rig>] PR <#> open for review: <story-title>`.
+Body: PR URL, reviewer recommendation tier (`glance_merge` / `review_encouraged` / `human_required`), architectural signals fired, story ID, story title.
+
+Other notification paths (chain-completion alerts, stall detection, order-fire stall detection) ship in follow-up sub-stories of pack #44.
+
 ## Cost tracking
 
 Each pool agent records `<phase>.session_id` and `<phase>.started_at` at start, `<phase>.completed_at` at end, on the story bead's metadata. The `sdlc-cost-rollup` order watches for `bead.closed` events and appends a row to `<city>/cost_history.csv`:
