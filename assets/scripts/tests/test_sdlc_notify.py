@@ -17,40 +17,14 @@ Run with:
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
-import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _helpers import _fake_msmtp
+
 NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    """Write a shell script and chmod it executable."""
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_msmtp(tmp: Path, *, exit_code: int = 0) -> Path:
-    """Build a fake `msmtp` binary that records argv + stdin then exits.
-
-    Records:
-    - argv → `<tmp>/msmtp-argv.log` (one line per call, space-separated)
-    - stdin → `<tmp>/msmtp-stdin.log` (multi-line)
-    """
-    path = tmp / "msmtp"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/msmtp-argv.log"
-        cat >> "{tmp}/msmtp-stdin.log"
-        exit {exit_code}
-        """
-    )
-    _write_executable(path, body)
-    return path
 
 
 class NotifyHappyPathTests(unittest.TestCase):

@@ -7,8 +7,19 @@
 # from bd at the call site so the finalizer prompt doesn't have to thread
 # it manually.
 #
-# Walking-skeleton scope: cycle 6 — subject template. Body composition
-# and the call to sdlc-notify ship in cycle 7.
+# Inputs:
+#   --rig <name>             rig name shown in the subject prefix
+#   --story-id <bead-id>     bead ID; bd is queried for the title
+#   --pr-url <url>           PR URL; the trailing path component is the
+#                            PR number, included in the subject
+#   --recommendation <tier>  reviewer recommendation tier
+#                            (glance_merge / review_encouraged /
+#                            human_required), included in the body
+#   --signals <csv>          architectural signals fired, included in
+#                            the body; empty becomes "none"
+#
+# Subject format: `[<rig>] PR <#> open for review: <story-title>`
+# Body: PR URL, recommendation, signals, story ID, story title.
 
 set -u
 
@@ -30,7 +41,7 @@ while [ $# -gt 0 ]; do
 done
 
 PR_NUMBER="${PR_URL##*/}"
-TITLE=$(bd show "$STORY_ID" --json | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())[0]["title"])')
+TITLE=$(bd show "$STORY_ID" --json | jq -r '.[0].title')
 
 SUBJECT="[${RIG}] PR ${PR_NUMBER} open for review: ${TITLE}"
 

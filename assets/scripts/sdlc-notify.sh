@@ -1,15 +1,26 @@
 #!/bin/bash
 # SDLC notification helper (pack #44 sub-story 1).
 #
-# Pipes a one-line subject + multi-line body through local `msmtp`. The
-# recipient is read from SDLC_NOTIFY_RECIPIENT (env var). msmtp itself
-# carries the sender configuration (see ~/.msmtprc). When `msmtp` is not
-# on PATH the helper logs to stderr and exits 0 — a missing notification
-# substrate must never fail a chain.
+# Pipes a one-line subject + multi-line body through local `msmtp`.
 #
-# Walking-skeleton scope: cycle 1 only — happy path through msmtp.
-# Recipient-from-env, graceful fallback, and arg-validation cycles
-# follow.
+# Inputs:
+#   --subject <text>            required; the email's Subject header value
+#   stdin                       email body (multi-line ok)
+#   SDLC_NOTIFY_RECIPIENT env   required; recipient address
+#   SDLC_NOTIFY_MSMTP env       optional; path to the msmtp binary
+#                               (default "msmtp", looked up via PATH).
+#                               Tests use this to exercise the
+#                               msmtp-absent fallback without disturbing
+#                               the host's real install.
+#
+# msmtp itself carries the sender configuration (see ~/.msmtprc).
+#
+# Exit codes:
+#   0   email sent, OR msmtp unavailable (notification gap logged to
+#       stderr; must never fail a chain)
+#   2   --subject missing
+#   non-zero from msmtp on transport failure (caller decides how to react;
+#       the finalizer wraps this call in `|| true`)
 
 set -u
 

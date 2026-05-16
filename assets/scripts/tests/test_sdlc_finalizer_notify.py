@@ -16,39 +16,25 @@ Run with:
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _helpers import _fake_msmtp, _write_executable
+
 WRAPPER_PATH = Path(__file__).resolve().parent.parent / "sdlc-finalizer-notify.sh"
 NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
 
 
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_msmtp(tmp: Path) -> Path:
-    """Build a fake msmtp that records argv + stdin to log files."""
-    path = tmp / "msmtp"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/msmtp-argv.log"
-        cat >> "{tmp}/msmtp-stdin.log"
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
 def _fake_bd_with_title(tmp: Path, *, title: str) -> Path:
-    """Build a fake `bd` whose `bd show <id> --json` returns the canned title."""
+    """Build a fake `bd` whose `bd show <id> --json` returns the canned title.
+
+    Stays here (not in `_helpers.py`) because no other test file currently
+    needs this exact shape. Lift to `_helpers.py` when a second consumer
+    appears.
+    """
     path = tmp / "bd"
     body = textwrap.dedent(
         f"""\
