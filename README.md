@@ -362,19 +362,29 @@ Why GitHub issues rather than chain-runnable beads: tech-debt items vary in acti
 
 ## Operator notification (v2.12)
 
-Closes the operator-poll loop on `human_required` PRs. When the finalizer parks a PR at `final_state=pr_open_for_human`, it invokes `assets/scripts/sdlc-finalizer-notify.sh`, which composes a subject + body and pipes them through `assets/scripts/sdlc-notify.sh`. The notification is opt-in:
+Closes the operator-poll loop on chain completions. When the finalizer reaches its terminal state, it invokes `assets/scripts/sdlc-finalizer-notify.sh`, which composes a subject + body and pipes them through `assets/scripts/sdlc-notify.sh`. Two opt-in flavors:
 
 ```bash
-# Per-rig env, set on the finalizer pool agent's environment
+# Required for any notification — recipient address.
 export SDLC_NOTIFY_RECIPIENT="operator@example.com"
+
+# Optional — also notify on auto-merged closes (final_state=merged).
+# Without this, only human_required PRs (final_state=pr_open_for_human)
+# trigger an email.
+export SDLC_NOTIFY_ALL_CLOSES=true
 ```
+
+Both env vars are read by the finalizer pool agent. `SDLC_NOTIFY_RECIPIENT` alone delivers the `human_required` PR alerts (the default behavior — replaces the operator's manual polling loop on PRs parked for review). Adding `SDLC_NOTIFY_ALL_CLOSES=true` extends coverage to auto-merged closes (useful for long-running chains where the operator has stepped away).
 
 `sdlc-notify.sh` sends via local `msmtp` (which carries its own sender config in `~/.msmtprc`); if `msmtp` is unavailable on the host, the helper logs the would-have-sent subject to stderr and exits 0 — a missing notification substrate must never fail a chain. When `SDLC_NOTIFY_RECIPIENT` is unset, the helper short-circuits before invoking `msmtp`.
 
-Subject format: `[<rig>] PR <#> open for review: <story-title>`.
+Subject formats:
+- `[<rig>] PR <#> open for review: <story-title>` — flavor 1 (PR parked, `final_state=pr_open_for_human`)
+- `[<rig>] PR <#> auto-merged: <story-title>` — flavor 2 (auto-merged, `final_state=merged`)
+
 Body: PR URL, reviewer recommendation tier (`glance_merge` / `review_encouraged` / `human_required`), architectural signals fired, story ID, story title.
 
-Other notification paths (chain-completion alerts, stall detection, order-fire stall detection) ship in follow-up sub-stories of pack #44.
+Other notification paths (stall detection, order-fire stall detection) ship in follow-up sub-stories of pack #44.
 
 ## Cost tracking
 
