@@ -310,7 +310,10 @@ enabled = true
 The script also no-ops when the trailer block is absent or empty. Failures from `gh` are logged to stderr but do not fail the finalizer step — the PR is already merged or parked at this point; the issue-filing is post-hoc capture.
 
 ```bash
-REVIEW_FILE="reviews/$STORY_ID.md"
+# Respect REVIEW_FILE if the "Open the PR" block set it from bead
+# metadata above; fall back to the conventional path otherwise (the
+# "PR already open" path skips that block, so the variable may be unset).
+REVIEW_FILE="${REVIEW_FILE:-reviews/$STORY_ID.md}"
 if [ -f "$REVIEW_FILE" ]; then
     python3 "$RIG_PACK/.claude/sdlc-discipline/tech_debt.py" file \
         --review-file "$REVIEW_FILE" \

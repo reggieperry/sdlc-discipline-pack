@@ -113,10 +113,17 @@ def validate_item(item: Any) -> str | None:
 
 
 def is_enabled(rig_root: Path) -> bool:
-    """Return True if the rig has opted in via architecture.toml."""
+    """Return True if the rig has opted in via architecture.toml.
+
+    Search order matches the pack convention: `.claude/rules/project/`
+    (where `sensitive_files`, `domain_model_files`, and `protocol_modules`
+    live) takes precedence over a top-level `architecture.toml`. The
+    top-level path is retained as a fallback for rigs that haven't
+    adopted the `.claude/rules/project/` layout.
+    """
     candidates = (
-        rig_root / "architecture.toml",
         rig_root / ".claude" / "rules" / "project" / "architecture.toml",
+        rig_root / "architecture.toml",
     )
     config_path = next((p for p in candidates if p.exists()), None)
     if config_path is None:
@@ -156,6 +163,51 @@ def build_issue_body(item: dict[str, Any], pr_url: str, review_path_rel: str) ->
         "Filed automatically by the SDLC discipline pack's tech-debt automation. "
         "Triage by adding context, closing as won't-fix, or routing through the chain.\n"
     )
+
+
+def ensure_label(gh_runner: Any = None) -> bool:
+    """Ensure the `tech-debt` label exists in the rig's GitHub repo.
+
+    `gh issue create --label tech-debt` fails on a repo where the label
+    has not been pre-created, with `could not add label: 'tech-debt' not
+    found`. This idempotent provisioner runs before any create call: it
+    checks for the label, creates it with a neutral color if absent, and
+    treats a race-condition "already exists" failure as success.
+
+    Returns True on success or already-exists; False on a hard failure
+    (network down, no auth). Callers should not proceed with create
+    operations if this returns False.
+    """
+    runner = gh_runner or _run_gh
+    listing = runner(["label", "list", "--search", "tech-debt", "--json", "name"])
+    if listing.returncode == 0:
+        try:
+            labels = json.loads(listing.stdout or "[]")
+        except json.JSONDecodeError:
+            labels = []
+        if any(item.get("name") == "tech-debt" for item in labels):
+            return True
+    # Label not present (or list failed); attempt create. The create call
+    # is the source of truth — if it succeeds or returns "already exists",
+    # we proceed.
+    created = runner(
+        [
+            "label",
+            "create",
+            "tech-debt",
+            "--color",
+            "fbca04",
+            "--description",
+            "Reviewer-flagged tech debt (filed by SDLC pack automation)",
+        ],
+    )
+    if created.returncode == 0:
+        return True
+    # gh returns non-zero for "already exists" — treat that as success.
+    if "already exists" in created.stderr.lower():
+        return True
+    print(f"[tech-debt] label create failed: {created.stderr.strip()}", file=sys.stderr)
+    return False
 
 
 def issue_exists(title: str, gh_runner: Any = None) -> bool:
@@ -225,6 +277,12 @@ def file_command(args: argparse.Namespace, gh_runner: Any = None) -> int:
         review_rel = str(review_path.relative_to(rig_root))
     except ValueError:
         review_rel = str(review_path)
+
+    # Provision the `tech-debt` label before any create call. gh issue
+    # create fails on an unprovisioned label; provisioning is idempotent.
+    if not ensure_label(gh_runner=gh_runner):
+        print("[tech-debt] label provisioning failed; aborting", file=sys.stderr)
+        return 0
 
     filed = 0
     skipped_dup = 0
