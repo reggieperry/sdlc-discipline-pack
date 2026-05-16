@@ -298,25 +298,39 @@ Missing `review_recommendation` (rig hasn't deployed v2.10.0 yet, or the reviewe
 
 The `review_encouraged` tier hands off to `orders/sdlc-delayed-merge.toml`, which runs on a 30m cooldown and decides whether to merge based on PR-comment overrides (`LGTM-AUTO`, `MERGE-NOW`) or the configured delay window (default 24h). See README's "Delayed-merge tier" section.
 
-## Operator notification on human_required (pack #44)
+## Operator notification (pack #44)
 
-When the merge-tier decision lands at `final_state=pr_open_for_human` with a PR number set, email the operator so they don't have to poll for the next review. The notification is opt-in via `SDLC_NOTIFY_RECIPIENT` env (the helper exits cleanly without sending when the env is unset or `msmtp` is unavailable). Failures never fail the finalizer step — the PR is already parked; the email is post-hoc capture.
+Two flavors, both opt-in:
+
+1. **`pr_open_for_human` alerts** — default behavior. When the merge-tier decision parks a PR at `final_state=pr_open_for_human` with a PR number set, email the operator so the next review is reactive rather than polled. Requires `SDLC_NOTIFY_RECIPIENT` env on the finalizer pool agent.
+2. **`merged` chain-completion alerts** — opt-in via `SDLC_NOTIFY_ALL_CLOSES=true`. When the merge-tier decision auto-merges at `final_state=merged`, also email the operator. Useful for long-running chains where the operator has stepped away. Same recipient as flavor 1.
+
+Failures never fail the finalizer step — the PR is already in its final state; the email is post-hoc capture.
 
 ```bash
 FINAL_STATE=$(bd show $STORY_ID --json | jq -r '.[0].metadata.final_state // empty')
-if [ "$FINAL_STATE" = "pr_open_for_human" ] && [ -n "$PR_NUMBER" ]; then
-    SIGNALS=$(bd show $STORY_ID --json | jq -r '.[0].metadata.architectural_signals // empty')
+SIGNALS=$(bd show $STORY_ID --json | jq -r '.[0].metadata.architectural_signals // empty')
+
+notify_finalizer_email() {
+    local notify_type="$1"
     "$RIG_PACK/assets/scripts/sdlc-finalizer-notify.sh" \
         --rig "$GC_RIG" \
         --story-id "$STORY_ID" \
         --pr-url "$PR_URL" \
         --recommendation "$RECOMMENDATION" \
         --signals "$SIGNALS" \
+        --type "$notify_type" \
         2>&1 | sed 's/^/sdlc-notify: /' >&2 || true
+}
+
+if [ "$FINAL_STATE" = "pr_open_for_human" ] && [ -n "$PR_NUMBER" ]; then
+    notify_finalizer_email "pr_open_for_human"
+elif [ "$FINAL_STATE" = "merged" ] && [ -n "$PR_NUMBER" ] && [ "${SDLC_NOTIFY_ALL_CLOSES:-false}" = "true" ]; then
+    notify_finalizer_email "merged"
 fi
 ```
 
-The `|| true` is load-bearing: a missing `msmtp`, an unset `SDLC_NOTIFY_RECIPIENT`, or a network failure must not block the finalizer's drain-ack. The stderr prefix lets the supervisor's log distinguish notification messages from finalizer activity.
+The `|| true` inside the helper function is load-bearing: a missing `msmtp`, an unset `SDLC_NOTIFY_RECIPIENT`, or a network failure must not block the finalizer's drain-ack. The stderr prefix lets the supervisor's log distinguish notification messages from finalizer activity.
 
 ## Tech-debt automation
 
