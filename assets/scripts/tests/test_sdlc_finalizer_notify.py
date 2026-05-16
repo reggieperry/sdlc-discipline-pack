@@ -185,5 +185,105 @@ class FinalizerNotifyBodyTests(unittest.TestCase):
             )
 
 
+class FinalizerNotifyTypeTests(unittest.TestCase):
+    """Cycles 1-3 (sub-story 3) — `--type` flag varies the subject prefix.
+
+    The wrapper handles two notification kinds: PR parked for human
+    review (sub-story 2 default) and PR auto-merged (sub-story 3,
+    opt-in via SDLC_NOTIFY_ALL_CLOSES on the finalizer side). The
+    wrapper itself doesn't know about the env gate — that's the
+    finalizer's concern; the wrapper just takes a `--type` value and
+    composes the matching subject.
+    """
+
+    def _invoke(self, tmp: Path, *, notify_type: str | None) -> subprocess.CompletedProcess[str]:
+        """Run the wrapper with the given --type (or omit it for default).
+
+        Test-builder helper. Test fixture is the same shape as the
+        existing FinalizerNotifyBodyTests; this extracts the boilerplate
+        so each `--type`-flavored test reads as one assertion's worth
+        of intent.
+        """
+        _fake_msmtp(tmp)
+        _fake_bd_with_title(tmp, title="Decision audit trail")
+        env = {
+            **os.environ,
+            "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
+            "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+        }
+        argv = [
+            str(WRAPPER_PATH),
+            "--rig",
+            "elder",
+            "--story-id",
+            "el-fake",
+            "--pr-url",
+            "https://github.com/reggieperry/elder_trading_system/pull/230",
+            "--recommendation",
+            "glance_merge",
+            "--signals",
+            "",
+        ]
+        if notify_type is not None:
+            argv.extend(["--type", notify_type])
+        return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=10)
+
+    def test_type_merged_produces_auto_merged_subject(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            result = self._invoke(tmp, notify_type="merged")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stdin_log = (tmp / "msmtp-stdin.log").read_text()
+            self.assertIn(
+                "auto-merged",
+                stdin_log,
+                f"--type merged should produce 'auto-merged' subject; got: {stdin_log!r}",
+            )
+
+    def test_type_pr_open_for_human_produces_open_for_review_subject(
+        self,
+    ) -> None:
+        """Cycle 2 — explicit pr_open_for_human pins the existing default behavior.
+
+        Backward-compat regression: when the finalizer prompt later
+        passes --type pr_open_for_human explicitly (sub-story 3's
+        cleanup), the produced subject must remain `open for review`.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            result = self._invoke(tmp, notify_type="pr_open_for_human")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stdin_log = (tmp / "msmtp-stdin.log").read_text()
+            self.assertIn(
+                "open for review",
+                stdin_log,
+                f"--type pr_open_for_human should produce 'open for review' "
+                f"subject; got: {stdin_log!r}",
+            )
+            self.assertNotIn(
+                "auto-merged",
+                stdin_log,
+                f"--type pr_open_for_human must NOT accidentally include "
+                f"'auto-merged'; got: {stdin_log!r}",
+            )
+
+    def test_unknown_type_exits_nonzero(self) -> None:
+        """Cycle 3 — unknown --type value is a misconfigured caller; fail loud."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            result = self._invoke(tmp, notify_type="not-a-valid-type")
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                f"wrapper should exit nonzero on unknown --type; "
+                f"stdout={result.stdout!r} stderr={result.stderr!r}",
+            )
+            self.assertIn(
+                "not-a-valid-type",
+                result.stderr,
+                f"stderr should name the rejected value; got: {result.stderr!r}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
