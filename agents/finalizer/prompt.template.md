@@ -298,6 +298,32 @@ Missing `review_recommendation` (rig hasn't deployed v2.10.0 yet, or the reviewe
 
 The `review_encouraged` tier hands off to `orders/sdlc-delayed-merge.toml`, which runs on a 30m cooldown and decides whether to merge based on PR-comment overrides (`LGTM-AUTO`, `MERGE-NOW`) or the configured delay window (default 24h). See README's "Delayed-merge tier" section.
 
+## Tech-debt automation
+
+After the merge gate completes (merge or park), file any `[tech-debt]` items captured by the reviewer's `tech_debt_trailer` JSON block as GitHub issues. The hook is a no-op unless the rig opts in via `architecture.toml`:
+
+```toml
+[tech_debt_automation]
+enabled = true
+```
+
+The script also no-ops when the trailer block is absent or empty. Failures from `gh` are logged to stderr but do not fail the finalizer step — the PR is already merged or parked at this point; the issue-filing is post-hoc capture.
+
+```bash
+# Respect REVIEW_FILE if the "Open the PR" block set it from bead
+# metadata above; fall back to the conventional path otherwise (the
+# "PR already open" path skips that block, so the variable may be unset).
+REVIEW_FILE="${REVIEW_FILE:-reviews/$STORY_ID.md}"
+if [ -f "$REVIEW_FILE" ]; then
+    python3 "$RIG_PACK/.claude/sdlc-discipline/tech_debt.py" file \
+        --review-file "$REVIEW_FILE" \
+        --rig-root "$(pwd)" \
+        --pr-url "$PR_URL" || true
+fi
+```
+
+The script reads the review file, parses the JSON trailer, dedups against existing open `tech-debt`-labeled issues by title, and files one issue per non-duplicate item. Issues link back to the parent PR and the review file for traceability. Humans triage the resulting issues — adding context, closing as won't-fix, or routing through the chain — outside this finalizer step.
+
 ## Close out
 
 After the gate completes (merge or human-queue), close your own step bead and exit:

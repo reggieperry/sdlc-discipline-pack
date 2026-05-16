@@ -159,9 +159,13 @@ Write the review to `reviews/$STORY_ID.md` (in the rig's main repo, not the per-
 ## Tech-debt items (structured)
 
 <!-- Emit this section ONLY when Findings contains at least one [tech-debt] item.
-     The finalizer's tech-debt-automation hook parses this trailer and files each
-     item as a GitHub issue in the rig's repo. Absence of this section = no issues
-     filed. Omit entirely when no tech-debt items exist. -->
+     The finalizer's tech-debt-automation hook
+     (`.claude/sdlc-discipline/tech_debt.py file`) parses this trailer and files
+     each item as a GitHub issue in the rig's repo. The hook is gated by the
+     rig's `architecture.toml` (`[tech_debt_automation] enabled = true`), so on
+     a rig that has not opted in, this trailer is captured but no issues are
+     filed. Absence of this section = no issues filed regardless of gate.
+     Omit entirely when no tech-debt items exist. -->
 
 ```json tech_debt_trailer
 [
