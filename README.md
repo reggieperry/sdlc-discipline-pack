@@ -343,6 +343,23 @@ Tunables:
 
 Override patterns are matched against the *first non-whitespace token* of each PR comment, so a comment that mentions `NACK` in prose does not fire the objection path. To object or fast-approve, lead with the keyword.
 
+## Tech-debt automation (v2.11)
+
+The reviewer emits a structured `tech_debt_trailer` JSON block at the bottom of the review file when it identifies `[tech-debt]` findings. The finalizer's tech-debt-automation hook (`overlay/per-provider/claude/.claude/sdlc-discipline/tech_debt.py`) reads that trailer after the merge gate and files one GitHub issue per item in the rig's repo, labeled `tech-debt`. Each issue body cites the target file:line, severity, suggested fix, the parent PR, and the source review file.
+
+The hook is opt-in per rig via `architecture.toml`:
+
+```toml
+[tech_debt_automation]
+enabled = true
+```
+
+Default is off — a rig that has not opted in still produces the trailer (the reviewer always emits it) but no issues are filed. This keeps the v2.11 rollout safe: rigs that pull the new pack version see no behavior change until they flip the gate.
+
+Dedup is by exact issue title against existing open `tech-debt`-labeled issues, queried via `gh issue list`. The hook is non-blocking — failures from `gh` are logged to stderr but do not fail the finalizer step; the PR is already merged or parked at that point.
+
+Why GitHub issues rather than chain-runnable beads: tech-debt items vary in actionability, so the capture step (machine-driven, fast) is decoupled from the prosecution step (human-triaged, optional). Patterns observed in the triaged backlog become candidates for future automation rules.
+
 ## Cost tracking
 
 Each pool agent records `<phase>.session_id` and `<phase>.started_at` at start, `<phase>.completed_at` at end, on the story bead's metadata. The `sdlc-cost-rollup` order watches for `bead.closed` events and appends a row to `<city>/cost_history.csv`:
