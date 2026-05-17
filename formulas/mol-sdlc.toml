@@ -22,7 +22,7 @@ You are starting the SDLC chain for story bead {{story_id}}. Your only job is to
    because the supervisor's default scale-check filters `--unassigned`. An
    assigned bead does not count as pool demand and the pool stays at min=0:
    ```bash
-   RIG="${GC_RIG:-csv2json}"
+   RIG="${GC_RIG:-unknown}"
    WORKER_TARGET="$RIG/sdlc-discipline.worker"
    bd update {{story_id}} \\
      --status=open \\

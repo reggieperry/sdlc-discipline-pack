@@ -23,7 +23,7 @@ If neither finds work, drain and exit cleanly.
 
 ```bash
 PHASE="documenter"
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 bd update $STORY_ID \
   --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \
   --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \
@@ -168,7 +168,7 @@ if ! git diff --cached --quiet; then
     fi
 fi
 
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 FINALIZER_TARGET="$RIG/sdlc-discipline.finalizer"
 bd update $STORY_ID \
   --set-metadata "documenter.completed_at=$(date -Iseconds)" \

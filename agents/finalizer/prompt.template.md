@@ -23,7 +23,7 @@ If neither finds work, drain and exit cleanly.
 
 ```bash
 PHASE="finalizer"
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 bd update $STORY_ID \
   --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \
   --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \

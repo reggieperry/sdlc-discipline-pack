@@ -23,7 +23,7 @@ If neither finds work, drain and exit cleanly via `gc runtime drain-ack` and `ex
 
 ```bash
 PHASE="tester"
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 bd update $STORY_ID \
   --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \
   --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \
@@ -126,7 +126,7 @@ fi
 **`PYTEST_RC=0` AND `GATE_VERDICT` is `pass` or `advisory`:** route to reviewer.
 
 ```bash
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 REVIEWER_TARGET="$RIG/sdlc-discipline.reviewer"
 bd update $STORY_ID \
   --set-metadata test_status="green" \
@@ -158,7 +158,7 @@ After each round, re-run pytest and the gate. If both pass (verdict in `pass`/`a
 ## Bounce to worker (red after three rounds, or unresolvable)
 
 ```bash
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 WORKER_TARGET="$RIG/sdlc-discipline.worker"
 bd update $STORY_ID \
   --set-metadata test_status="red" \
