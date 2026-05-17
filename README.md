@@ -2,6 +2,14 @@
 
 A Gas City pack that runs an SDLC chain — plan, build, test, review, document, finalize — against any rig with a Click/pytest/Python project shape. Five pool agents, zero named sessions, parallel-by-default. Concurrency is bounded by host CPU/RAM and per-account API rate limits, not by named-session serialization.
 
+## Purpose
+
+LLM-based coding agents can write working code. They cannot, on their own, write *consistent* code at codebase scale — model outputs drift across independent generations even when prompts and seeds are held constant. A codebase built by many parallel agents under no external constraint looks like ten different developers wrote it: refactors stop composing, onboarding the next agent (or human) gets harder, and the trust required to ship gets absorbed back into per-change human review.
+
+This pack is the *discipline layer* of a two-layer answer to that problem. It encodes engineering disciplines that have shaped software practice for 50 years — modularity, test-driven development, domain-driven design, refactoring — as auto-loaded rules, differential-gate static analysis, and a chain of pool agents whose phase-bounded roles enforce each other's work. [Gas City](https://github.com/gastownhall/gascity) is the complementary *orchestration layer* that runs many such chains in parallel. Together they enable a *software factory*: many agents producing work to a defined quality bar without per-change human review.
+
+Neither layer eliminates the human engineer; together they relocate the engineer's work. The chain runs autonomously within a story's scope, but the *story itself* — acceptance criteria, scope boundaries, sensitive-file declarations, dependency links — must be authored by a human with enough context on the codebase, the domain, and the constraints to write a contract the chain can fulfill mechanically. A vague story produces a wandering chain that burns tokens and ships work that does not match the intent. A tight story produces a clean chain run that lands a PR matching the author's expectation. Specifying executable work is the new craft this pack assumes; no amount of discipline or orchestration recovers from an under-specified story.
+
 ## Architecture (v2.0)
 
 The chain has five LLM pools and zero named sessions. A story bead enters at the worker pool and exits closed after the finalizer.
@@ -21,6 +29,84 @@ kickoff (one-shot)
 ```
 
 Total max concurrent sessions per rig: 15. Bead handoffs use `metadata.gc.routed_to` only — never `--assignee` — because the supervisor's default scale-check filters `--unassigned`. The pack's `comparison/v2.0a-stall-record.json` records the regression that motivated this convention.
+
+## Authoring stories
+
+The chain consumes one input: a story bead. Whoever authors that bead determines what the chain produces. This section covers the two paths a human engineer takes to get a story into the chain. The Story-graph bridge section below documents the bridge tool's full subcommand surface for reference; this section is the workflow.
+
+### The story-frontmatter contract
+
+A story is a markdown file with YAML frontmatter, conventionally at `stories/<PREFIX>-<NNN>-<slug>.md` where `<PREFIX>` matches the rig's bd issue prefix. The frontmatter declares the contract; the markdown body provides context.
+
+The four fields that determine chain behavior:
+
+| Field | Purpose |
+|---|---|
+| **Acceptance criteria** | Testable list of "done." The tester pool checks each item; the reviewer pool checks the diff against this list. Vague criteria produce a wandering chain. |
+| **Scope** | Names what's *in* and what's *out*. The reviewer flags scope drift as a finding; the finalizer parks the PR if the diff exceeds declared scope. |
+| **Sensitive files** | Paths the worker must touch carefully (or not at all). The architectural-signals script consumes this; the glance rubric routes touches here to higher-review tiers. |
+| **Dependencies** | Story IDs that must merge first. The bridge tool builds a `bd graph` so the supervisor only releases stories whose deps are satisfied. |
+
+A typical body adds: outcome (one paragraph, plain English), notes (why this approach), out-of-scope (what's deliberately deferred). The full frontmatter schema and the lifecycle states (`draft` / `ready` / `filed` / `in-flight` / `merged` / `closed`) are documented in the auto-loaded rule at `overlay/per-provider/claude/.claude/rules/stories.md`.
+
+### Path 1: interactive co-authoring with Claude Code
+
+Recommended when the story is nontrivial or the engineer wants a second pair of eyes on the spec before the chain spends tokens on it. Claude reads the rig's existing context — other stories, the build plan, the code shape — and drafts the spec in conversation.
+
+```bash
+cd <rig>
+claude
+```
+
+In the interactive session, describe the work. Useful prompt shapes:
+
+- *"I want to add X to Y. Read `stories/` to see the format and numbering, then draft a spec under `stories/`."*
+- *"Read `docs/build-plan.md` item #N. Draft the story that lands that item."*
+- *"Here's a reviewer's tech-debt trailer from PR #M; turn it into a story spec."*
+
+Claude reads adjacent stories for naming and numbering convention, reads the build plan or domain docs for fit, and drafts `stories/<PREFIX>-<NNN>-<slug>.md` with frontmatter and body. The engineer reviews the draft — *this review is the load-bearing step*, since the chain will execute whatever the spec says. When the draft is right, file and kick off:
+
+```bash
+# Either ask Claude to file it, or do it yourself:
+bash commands/stories/run.sh file <PREFIX>-<NNN>-<slug>
+# The bridge prints the assigned bead ID. Kick the chain off:
+bash commands/kickoff/run.sh <bead-id>
+```
+
+### Path 2: manual authoring
+
+Use when the shape of the work is already clear and Claude's help drafting isn't worth the round trip. Two sub-paths.
+
+**Hand-write the markdown.** Pre-author the spec at `stories/<PREFIX>-<NNN>-<slug>.md` directly. Validate the frontmatter with the bridge tool, then bulk-file:
+
+```bash
+cd <rig>
+bash commands/stories/run.sh validate
+bash commands/stories/run.sh file
+bash commands/kickoff/run.sh <bead-id-from-stdout>
+```
+
+The bridge writes `filed_as_bead: <id>` back into each story's frontmatter and flips `status: ready → status: filed`. Bulk-file is the right shape when authoring a phase of related stories at once (e.g., a dependency graph for a whole milestone).
+
+**Editor-prompted scaffold.** When the engineer wants a prefilled template without writing the markdown by hand:
+
+```bash
+cd <rig>
+bash commands/story-new/run.sh "<title>"
+```
+
+Opens `$EDITOR` on a template with the Outcome / Acceptance / Scope / Sensitive / Notes structure. After save, prompts for `open_pr` and `base_branch` defaults, runs `bd create`, echoes the new bead ID. Kick off with `commands/kickoff/run.sh`. Best for one-off stories where the rest of the dependency graph already exists.
+
+### What makes a tight story
+
+A heuristic for self-review before kickoff:
+
+- **Acceptance criteria are testable.** Each item is something the tester pool can verify with a command or the reviewer can verify by reading the diff. *"Improve performance"* is not testable; *"p50 latency under 50 ms on the benchmark in `tests/perf/`"* is.
+- **Scope says what's out.** The most expensive chain runs wander into adjacent code because the spec did not say "leave X alone." If the spec declares sensitive files, it should also list adjacent files explicitly *not* being touched.
+- **Sensitive files are accurate.** Under-declared sensitive files defeat the architectural-signals gate; over-declared sensitive files spam the reviewer with false positives. The list should be the actual blast radius of the work.
+- **Dependencies are minimal.** Long dep chains stall on whatever upstream is slowest. Split when possible; explicitly justify when not.
+
+A spec passing this rubric typically produces a clean glance-merge chain. A spec failing it produces wandering, rework, or `human_required` PRs that absorb the chain's speed back into review time — the exact failure mode the architecture exists to prevent.
 
 ## What's in this pack
 
@@ -459,15 +545,6 @@ commands/cost-story/run.sh <story_id>          # per-phase breakdown for one sto
 commands/cost-session/run.sh --since 1h        # time-window summary
 commands/cost-stories/run.sh --rig csv2json    # cross-story summary, optionally filtered
 ```
-
-## Authoring stories
-
-```bash
-cd <rig>
-bash commands/story-new/run.sh "csv2json: add a --quiet flag"
-```
-
-Opens `$EDITOR` on a prefilled markdown template with the entry-point format (Outcome / Acceptance / Scope / Sensitive / Notes). After save, prompts for `open_pr` and `base_branch` (with rig env defaults). Runs `bd create` with the description + metadata; echoes the new bead ID.
 
 ## Running the chain
 
