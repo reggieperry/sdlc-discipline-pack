@@ -13,6 +13,7 @@ Run with:
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 import textwrap
 import unittest
@@ -48,11 +49,15 @@ def _make_memory_dir(tmp: Path, cwd_path: str, files: dict[str, str]) -> Path:
     """Create a Claude-Code-style memory directory at tmp/.claude/projects/<key>/memory/.
 
     `cwd_path` is the would-be working directory the operator was in when
-    Claude Code initialized the memory. Its absolute form, with `/` → `-`,
-    is the project-key. Returns the path to the created memory dir so
-    individual tests can poke at it.
+    Claude Code initialized the memory. The project key normalizes `/`,
+    `.`, and `_` to `-` — matching the production `project_key()` rule.
+    Underscore handling matters because Python's `tempfile.TemporaryDirectory`
+    can produce paths whose random suffix contains `_` (the suffix charset
+    is `[a-zA-Z0-9_]`); without underscore normalization here the test
+    helper and the production code disagree on the resulting key whenever
+    that random draw lands an underscore, and the tests flake.
     """
-    project_key = cwd_path.replace("/", "-")
+    project_key = re.sub(r"[/._]", "-", cwd_path)
     memory_dir = tmp / ".claude" / "projects" / project_key / "memory"
     memory_dir.mkdir(parents=True)
     for name, content in files.items():
@@ -99,6 +104,45 @@ class ProjectKeyTests(unittest.TestCase):
                 f"project_key should start with `-` (absolute path replacement); got {key!r}",
             )
             self.assertIn("rig-root", key, "project_key should include the rig dir name")
+
+    def test_underscores_in_dir_name_normalized_to_dashes(self) -> None:
+        """v2.13.1 regression: dir names containing `_` (like Elder's
+        `elder_trading_system`) must dash-normalize to match Claude Code's
+        actual auto-memory directory naming. The v2.13.0 implementation
+        replaced only `/`, leaving underscores intact, which produced
+        empty snapshots on real rigs.
+        """
+        with TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / "elder_trading_system"
+            cwd.mkdir()
+            key = snapshot.project_key(cwd)
+            self.assertIn(
+                "elder-trading-system",
+                key,
+                f"underscore in dir name should become dash; got {key!r}",
+            )
+            self.assertNotIn(
+                "elder_trading_system",
+                key,
+                f"underscore form should not survive normalization; got {key!r}",
+            )
+
+    def test_dots_in_path_normalized_to_dashes(self) -> None:
+        """v2.13.1 regression: dotted path components (like `.gc` in
+        worktree paths under `<workspace>/.gc/worktrees/...`) must also
+        dash-normalize. Claude Code writes these as `--gc` (double-dash
+        because the dot follows a slash, both of which become dashes).
+        """
+        with TemporaryDirectory() as tmp:
+            cwd = Path(tmp) / ".gc-style-dir"
+            cwd.mkdir()
+            key = snapshot.project_key(cwd)
+            self.assertIn(
+                "-gc-style-dir",
+                key,
+                f"dot at start of dir name should normalize to dash; got {key!r}",
+            )
+            self.assertNotIn(".", key, f"no literal dot should remain in key; got {key!r}")
 
 
 class FilterTypeTests(unittest.TestCase):

@@ -52,12 +52,19 @@ _INCLUDED_TYPES = frozenset({"project", "reference"})
 def project_key(cwd: Path) -> str:
     """Compute the Claude Code auto-memory project-key for a working directory.
 
-    The convention replaces `/` with `-` on the absolute path; a rig at
-    `/home/user/rig` keys under `-home-user-rig`. Symlinks resolved via
-    `Path.resolve()` so the key matches whichever path Claude Code wrote
-    when it initialized the memory directory.
+    The convention replaces `/`, `.`, and `_` with `-` on the absolute path.
+    A rig at `/home/user/coding/python/elder_trading_system` keys under
+    `-home-user-coding-python-elder-trading-system` — note the underscore
+    in the directory name becomes a dash, matching what Claude Code wrote
+    when it initialized the auto-memory directory. Symlinks resolved via
+    `Path.resolve()` so the key matches whichever path Claude Code wrote.
+
+    The v2.13.0 initial implementation handled only `/` and produced empty
+    snapshots on rigs whose directory names contained underscores (Elder)
+    or dots (`.gc` worktree paths). The smoke chain on 2026-05-17 surfaced
+    the gap; v2.13.1 normalizes all three separators.
     """
-    return str(cwd.resolve()).replace("/", "-")
+    return re.sub(r"[/._]", "-", str(cwd.resolve()))
 
 
 def memory_dir(cwd: Path, home: Path) -> Path:
