@@ -386,6 +386,55 @@ Body: PR URL, reviewer recommendation tier (`glance_merge` / `review_encouraged`
 
 Other notification paths (stall detection, order-fire stall detection) ship in follow-up sub-stories of pack #44.
 
+## Claude retry wrapper (v2.12)
+
+Closes the chain-stall recovery loop. Chain pool workers can stall on two failure modes — per-turn duration cap (Mode B) and API 529 overload (Mode A) — exiting cleanly without completing handoff. The pool reconciler sees a running session that has finished driving but is alive in tmux; operator intervention is required to either nudge the agent or re-sling the bead.
+
+The wrapper sits between `gc`'s pool spawn and the `claude` binary. After each `claude` exit it delegates the retry-or-exit decision to `claude_retry.py`. On stall: re-spawns claude via `--resume <session-id>` with a continuation prompt and walks a per-cause sleep schedule. Writes `<template>.attempt_n`, `<template>.last_exit_cause`, and `<template>.state` (`running` / `resuming` / `exhausted`) to the bead per attempt — operator audit trail visible via `bd show <bead>`.
+
+### How a rig opts in
+
+Add to the workspace `city.toml`:
+
+```toml
+[providers.claude]
+base = "builtin:claude"
+command = "/path/to/pack-cache/assets/scripts/sdlc-claude-with-retry.sh"
+path_check = "claude"
+```
+
+`base = "builtin:claude"` inherits gc's built-in claude provider defaults (`ready_delay_ms`, etc.) while the `command` override redirects every claude spawn through the wrapper. `path_check = "claude"` tells gc to verify `claude` itself is installed on `PATH` (the wrapper is a shell script; gc's existence check needs to look for the real binary). Without `path_check`, gc would check for the wrapper's path on every spawn.
+
+The `command` path is the wrapper's location in the pack cache — for path-based imports the cache prefix is set at install time and is stable. Find it via `ls -d <workspace>/.gc/cache/includes/sdlc-discipline-pack-*/assets/scripts/sdlc-claude-with-retry.sh`.
+
+### What's auto-resolved
+
+The wrapper auto-resolves two pack-side env vars so the rig's `city.toml` doesn't have to thread them:
+
+- `SDLC_TEMPLATE` — derived from `GC_SESSION_NAME` (e.g., `sdlc-discipline.worker-1` → `worker`). gc sets `GC_SESSION_NAME` on every pool agent.
+- `CLAUDE_RETRY_PY` — resolved relative to the wrapper's own location.
+
+`STORY_ID` is read from gc's spawn-time env directly and stays required.
+
+### What's configurable
+
+| Env var | Default | Purpose |
+| ------- | ------- | ------- |
+| `SDLC_MAX_ATTEMPTS` | `5` | Max retry attempts before exit 75 (EX_TEMPFAIL) |
+| `SDLC_CLAUDE_SESSION_LOG` | `/dev/null` | Path to claude's session JSONL (drives cause classification). Production sets via the runtime; tests override. |
+| `SDLC_RETRY_SLEEP_OVERRIDE` | (unset) | Override per-retry sleep (seconds). Used by tests. |
+| `SDLC_NOTIFY_MSMTP` | `msmtp` | Override the msmtp binary path (used by tests to exercise the absent-msmtp fallback). |
+
+### Per-cause retry schedule
+
+| Cause | Schedule (seconds) | Rationale |
+| ----- | ------------------ | --------- |
+| `turn_cap` (Mode B) | 5, 5, 5, 5, 5 | Per-turn limit; immediate retry is fine |
+| `api_529` (Mode A) | 30, 60, 120, 300, 600 | API overload; exponential backoff |
+| `api_429` | 60, 60, 60, 60, 60 | Rate limit; conservative |
+| `crash` | 60, 60, 60, 60, 60 | Process died abnormally; system room |
+| `unknown` | 60, 60, 60, 60, 60 | Conservative default |
+
 ## Cost tracking
 
 Each pool agent records `<phase>.session_id` and `<phase>.started_at` at start, `<phase>.completed_at` at end, on the story bead's metadata. The `sdlc-cost-rollup` order watches for `bead.closed` events and appends a row to `<city>/cost_history.csv`:
