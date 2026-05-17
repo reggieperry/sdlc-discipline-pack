@@ -21,7 +21,7 @@ If neither finds work, drain and exit cleanly.
 
 ```bash
 PHASE="reviewer"
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 bd update $STORY_ID \
   --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \
   --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \
@@ -272,7 +272,7 @@ fi
 The documenter is a pool agent (was named on_demand in v1.x; converted to a pool in v2.0). Route via `gc.routed_to` only — never `--assignee`.
 
 ```bash
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 DOCUMENTER_TARGET="$RIG/sdlc-discipline.documenter"
 bd update $STORY_ID \
   --set-metadata "reviewer.completed_at=$(date -Iseconds)" \
@@ -290,7 +290,7 @@ The bead returns to the worker pool. A new worker instance claims it, sees `meta
 Worker is a pool agent — set only `gc.routed_to`, never `--assignee`. The default scale-check filters `--unassigned`; an assigned bead is invisible to the pool reconciler and the chain stalls.
 
 ```bash
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 WORKER_TARGET="$RIG/sdlc-discipline.worker"
 bd update $STORY_ID \
   --set-metadata "reviewer.completed_at=$(date -Iseconds)" \

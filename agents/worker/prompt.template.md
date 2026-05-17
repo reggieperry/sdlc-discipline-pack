@@ -31,7 +31,7 @@ If neither finds work, exit cleanly via `gc runtime drain-ack` and `exit`. The p
 
 ```bash
 PHASE="worker"
-RIG="${GC_RIG:-csv2json}"
+RIG="${GC_RIG:-unknown}"
 bd update $STORY_ID \
   --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \
   --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \
