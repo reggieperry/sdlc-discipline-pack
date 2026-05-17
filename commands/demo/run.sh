@@ -9,14 +9,19 @@
 #   │ session list (--watch)    │  artifacts + git commits    │
 #   └───────────────────────────┴─────────────────────────────┘
 #
-# Adjust CITY and RIG below for your setup. Defaults match this pilot.
+# Required env vars (set per-host so the script never falls back to
+# someone else's paths):
+#   SDLC_DEMO_CITY — absolute path to the Gas City workspace
+#   SDLC_DEMO_RIG  — absolute path to the rig dir inside the workspace
+#   SDLC_DEMO_PACK — absolute path to the sdlc-discipline pack
+#                    (defaults to $SDLC_DEMO_RIG/packs/sdlc-discipline)
 
 set -e
 
 STORY_ID="${1:-?}"
 SESSION="sdlc-demo"
-CITY="${SDLC_DEMO_CITY:-/home/reggie/coding/agentic-coding/python/bright-lights}"
-RIG="${SDLC_DEMO_RIG:-/home/reggie/coding/agentic-coding/python/elder_trading_system/csv2json}"
+CITY="${SDLC_DEMO_CITY:?SDLC_DEMO_CITY is required — absolute path to the Gas City workspace}"
+RIG="${SDLC_DEMO_RIG:?SDLC_DEMO_RIG is required — absolute path to the rig dir inside the workspace}"
 PACK="${SDLC_DEMO_PACK:-$RIG/packs/sdlc-discipline}"
 
 # Kill any prior demo session so we always start clean.

@@ -72,7 +72,7 @@ class FinalizerNotifySubjectTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
-                "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+                "SDLC_NOTIFY_RECIPIENT": "user@example.com",
             }
             result = subprocess.run(
                 [
@@ -139,7 +139,7 @@ class FinalizerNotifyBodyTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
-                "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+                "SDLC_NOTIFY_RECIPIENT": "user@example.com",
             }
             result = subprocess.run(
                 [
@@ -209,7 +209,7 @@ class FinalizerNotifyTypeTests(unittest.TestCase):
         env = {
             **os.environ,
             "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
-            "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+            "SDLC_NOTIFY_RECIPIENT": "user@example.com",
         }
         argv = [
             str(WRAPPER_PATH),

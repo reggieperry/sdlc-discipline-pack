@@ -46,7 +46,7 @@ class NotifyHappyPathTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
-                "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+                "SDLC_NOTIFY_RECIPIENT": "user@example.com",
             }
             result = subprocess.run(
                 [str(NOTIFY_PATH), "--subject", "Test alert"],
@@ -65,7 +65,7 @@ class NotifyHappyPathTests(unittest.TestCase):
             )
             argv_log = (tmp / "msmtp-argv.log").read_text().strip()
             self.assertIn(
-                "ghostdogsamurai@fastmail.fm",
+                "user@example.com",
                 argv_log,
                 f"msmtp should be invoked with the recipient address; got argv: {argv_log!r}",
             )
@@ -103,7 +103,7 @@ class NotifyArgValidationTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
-                "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+                "SDLC_NOTIFY_RECIPIENT": "user@example.com",
             }
             result = subprocess.run(
                 [str(NOTIFY_PATH)],  # no --subject
@@ -173,7 +173,7 @@ class NotifyFallbackTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
-                "SDLC_NOTIFY_RECIPIENT": "ghostdogsamurai@fastmail.fm",
+                "SDLC_NOTIFY_RECIPIENT": "user@example.com",
                 "SDLC_NOTIFY_MSMTP": "/nonexistent/path/to/msmtp",
             }
             result = subprocess.run(

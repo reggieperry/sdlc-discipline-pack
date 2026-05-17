@@ -86,8 +86,8 @@ def encode_worktree_path(worktree: str) -> str:
     `_`, and `.` in the absolute path with `-`. Consecutive substitutions
     produce double-dashes, which is the canonical form — do not collapse.
     Example:
-      `/home/reggie/elder_trading_system/.gc` →
-      `-home-reggie-elder-trading-system--gc`
+      `/home/username/elder_trading_system/.gc` →
+      `-home-username-elder-trading-system--gc`
     """
     p = os.path.abspath(worktree).rstrip("/")
     encoded = p
