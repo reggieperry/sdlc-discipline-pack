@@ -472,7 +472,7 @@ Schema 2. Pack version follows semver:
 
 Entries list the headline change for each tagged release, newest first.
 
-- **v2.11.0 (unreleased)** — six PRs accumulated on `main` since v2.10.0. Will tag when the v2.11 scope converges.
+- **v2.11.0** — six PRs accumulated on `main` since v2.10.0. Tagged 2026-05-16; remaining open issues (#36 sub-2, #38, #39, #45, #46) moved to v2.12+. The 2026-05-16 release of accumulated v2.11 scope.
   - PR #37 (issue #34) — rebase-watcher `CONFLICTING` handling and sweeper rig-enumeration fix; the v2.7.0 watcher's missed-fire under the observed concurrent-conflict pattern closes.
   - PR #40 (issue #35) — `NEXT` sentinel for numbered-catalog ID assignment in worker output. Worker substitutes the next free integer at plan time; removes a class of false-conflict where two parallel chains chose the same catalog ID.
   - PR #41 (issue #32 sub-1) — reviewer emits structured `tech_debt_trailer` JSON at the bottom of `reviews/<bead-id>.md` when findings include `[tech-debt]` items.
