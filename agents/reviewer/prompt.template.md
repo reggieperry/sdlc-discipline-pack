@@ -28,6 +28,19 @@ bd update $STORY_ID \
   --set-metadata "rig=${RIG}"
 ```
 
+## Load operator context (v2.13.0)
+
+The kickoff hook writes a snapshot of the operator's project and reference memory entries to a per-bead file. The path is stored on the bead as `metadata.operator_context_path`. Read the file now so you have the operator's context alongside the rig's checked-in `CLAUDE.md` and rules — useful when judging whether a finding is in scope for the rig's current project state.
+
+```bash
+OPERATOR_CONTEXT=$(bd show $STORY_ID --json | jq -r '.[0].metadata.operator_context_path // ""')
+if [ -n "$OPERATOR_CONTEXT" ] && [ -s "$OPERATOR_CONTEXT" ]; then
+    cat "$OPERATOR_CONTEXT"
+fi
+```
+
+If the file is absent or empty, the operator's memory directory is empty or not yet set up — proceed without it.
+
 ## Get to the worker's branch
 
 ```bash

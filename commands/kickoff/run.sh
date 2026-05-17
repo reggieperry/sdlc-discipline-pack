@@ -86,7 +86,20 @@ bd update "$STORY_ID" \
     --append-notes "SDLC kickoff at $NOW: worker → tester → reviewer → documenter → finalizer. Kickoff via sdlc-kickoff.sh (no LLM)." \
     >/dev/null
 
-echo "sdlc-kickoff: done. Pool reconciler will spawn a worker on its next tick."
+# Operator-memory snapshot (pack #45). Writes the operator's Claude Code
+# auto-memory entries — filtered to entries whose `metadata.type` is in
+# {project, reference} — to a per-bead context file. Chain agents read
+# the file at session start so they have the operator's project context
+# alongside the rig's checked-in CLAUDE.md and rules. Graceful: writes
+# an empty file when the operator's memory dir is absent.
 SCRIPT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
+SNAPSHOT_PY="$SCRIPT_DIR/overlay/per-provider/claude/.claude/sdlc-discipline/snapshot_operator_memory.py"
+OPERATOR_CONTEXT="$DIR/.gc/operator-context/$STORY_ID.md"
+if [ -f "$SNAPSHOT_PY" ]; then
+    python3 "$SNAPSHOT_PY" --output "$OPERATOR_CONTEXT" --cwd "$DIR" 2>&1 | sed 's|^|  |' || true
+    bd update "$STORY_ID" --set-metadata operator_context_path="$OPERATOR_CONTEXT" >/dev/null
+fi
+
+echo "sdlc-kickoff: done. Pool reconciler will spawn a worker on its next tick."
 echo "  Watch progress:  sh $SCRIPT_DIR/assets/scripts/sdlc-watch.sh $STORY_ID"
 echo "  Bead state:      bd show $STORY_ID --json | jq '.[0].metadata'"

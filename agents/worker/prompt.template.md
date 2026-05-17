@@ -40,6 +40,19 @@ bd update $STORY_ID \
 
 These timestamps feed `cost_history.csv` via the cost-rollup observer when the bead closes.
 
+## Load operator context (v2.13.0)
+
+The kickoff hook writes a snapshot of the operator's project and reference memory entries to a per-bead file at `$DIR/.gc/operator-context/$STORY_ID.md`. The path is stored on the bead as `metadata.operator_context_path`. Read the file now so you have the operator's context alongside the rig's checked-in `CLAUDE.md` and rules — recent project state, references to external systems, and decision history that does not live in source.
+
+```bash
+OPERATOR_CONTEXT=$(bd show $STORY_ID --json | jq -r '.[0].metadata.operator_context_path // ""')
+if [ -n "$OPERATOR_CONTEXT" ] && [ -s "$OPERATOR_CONTEXT" ]; then
+    cat "$OPERATOR_CONTEXT"
+fi
+```
+
+If the file is absent or empty, the operator's memory directory is empty or not yet set up — proceed without it.
+
 ## Check for rebase-iteration mode (v2.7.0+)
 
 Before reading the formula, check whether this is a fresh worker session on a new story or a re-entry to fix a merge conflict on an existing branch. The finalizer routes a bead back to the worker pool when `git rebase origin/$TARGET` produces conflicts; that path sets `metadata.merge_failure_count` to a non-zero value.
