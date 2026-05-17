@@ -19,8 +19,18 @@
 #
 # Required env:
 #   STORY_ID          — bead ID of the story this template is working on.
-#   SDLC_TEMPLATE     — pool template (worker/tester/reviewer/...).
-#   CLAUDE_RETRY_PY   — absolute path to claude_retry.py.
+#                       gc sets this at agent spawn.
+#
+# Auto-resolved env (explicit value wins; production gc rarely sets these):
+#   SDLC_TEMPLATE     — pool template (worker/tester/reviewer/documenter/
+#                       finalizer). Auto-resolves from GC_SESSION_NAME
+#                       (e.g., `sdlc-discipline.worker-1` → `worker`).
+#                       Exits nonzero if neither SDLC_TEMPLATE nor
+#                       GC_SESSION_NAME is set.
+#   CLAUDE_RETRY_PY   — absolute path to claude_retry.py. Auto-resolves
+#                       from the wrapper's own location:
+#                       `<wrapper-dir>/../../overlay/per-provider/claude/
+#                       .claude/sdlc-discipline/claude_retry.py`.
 #
 # Optional env:
 #   SDLC_CLAUDE_SESSION_LOG    — path to claude's session JSONL. Defaults to
@@ -34,8 +44,27 @@
 set -u
 
 STORY_ID="${STORY_ID:?STORY_ID env required}"
-SDLC_TEMPLATE="${SDLC_TEMPLATE:?SDLC_TEMPLATE env required}"
-CLAUDE_RETRY_PY="${CLAUDE_RETRY_PY:?CLAUDE_RETRY_PY env required}"
+
+# SDLC_TEMPLATE auto-resolution: production gc sets GC_SESSION_NAME
+# (e.g., `sdlc-discipline.worker-1`) but does NOT set SDLC_TEMPLATE.
+# Extract the template name from GC_SESSION_NAME by stripping the
+# `sdlc-discipline.` prefix and the `-N` suffix. Explicit SDLC_TEMPLATE
+# wins for tests + operator overrides.
+if [ -z "${SDLC_TEMPLATE:-}" ] && [ -n "${GC_SESSION_NAME:-}" ]; then
+    _template_candidate="${GC_SESSION_NAME#sdlc-discipline.}"
+    SDLC_TEMPLATE="${_template_candidate%-*}"
+fi
+SDLC_TEMPLATE="${SDLC_TEMPLATE:?SDLC_TEMPLATE env required (or set GC_SESSION_NAME)}"
+
+# CLAUDE_RETRY_PY auto-resolution: the wrapper lives at
+# `<pack>/assets/scripts/sdlc-claude-with-retry.sh`; the Python module
+# lives at `<pack>/overlay/per-provider/claude/.claude/sdlc-discipline/
+# claude_retry.py`. Resolve relative to the wrapper's own location so
+# production gc doesn't have to know the pack layout.
+if [ -z "${CLAUDE_RETRY_PY:-}" ]; then
+    _wrapper_dir="$(cd "$(dirname "$0")" && pwd)"
+    CLAUDE_RETRY_PY="${_wrapper_dir}/../../overlay/per-provider/claude/.claude/sdlc-discipline/claude_retry.py"
+fi
 SESSION_LOG="${SDLC_CLAUDE_SESSION_LOG:-/dev/null}"
 SLEEP_OVERRIDE="${SDLC_RETRY_SLEEP_OVERRIDE:-}"
 MAX_ATTEMPTS="${SDLC_MAX_ATTEMPTS:-5}"
