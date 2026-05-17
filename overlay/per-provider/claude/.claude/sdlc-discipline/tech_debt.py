@@ -213,10 +213,15 @@ def ensure_label(gh_runner: Any = None) -> bool:
 def issue_exists(title: str, gh_runner: Any = None) -> bool:
     """Return True if an open `tech-debt`-labeled issue with this title exists.
 
-    The search uses `gh issue list --label tech-debt --state open --search`
-    and compares exact title matches in the returned set. On gh failure
-    (network, missing token), returns False — better to risk a duplicate
-    than to silently skip filing.
+    Fetches all open `tech-debt` issues (up to 200, well above the realistic
+    operational ceiling) and filters by exact title in Python. The `--search`
+    flag was removed in v2.12.1 because GitHub search-query syntax treats
+    `[`, `]`, `.`, `:`, and em dashes as operators or word boundaries — a
+    title like `[tech-debt] EquityCalculator.snapshot uses datetime.now(UTC) — …`
+    silently returns empty results, defeating dedup. The `tech-debt` label
+    keeps the candidate set small enough that the Python filter is not a
+    performance concern. On gh failure (network, missing token), returns
+    False — better to risk a duplicate than to silently skip filing.
     """
     runner = gh_runner or _run_gh
     result = runner(
@@ -227,10 +232,10 @@ def issue_exists(title: str, gh_runner: Any = None) -> bool:
             "tech-debt",
             "--state",
             "open",
-            "--search",
-            title,
             "--json",
             "title",
+            "--limit",
+            "200",
         ],
     )
     if result.returncode != 0:
