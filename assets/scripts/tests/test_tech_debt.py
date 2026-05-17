@@ -246,6 +246,46 @@ class IssueExistsTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             self.assertFalse(tech_debt.issue_exists("[tech-debt] Foo", gh_runner=gh))
 
+    def test_does_not_pass_search_flag_to_gh(self) -> None:
+        """v2.12.1 regression test.
+
+        v2.11.0–v2.12.0 passed `--search <title>` to `gh issue list`.
+        GitHub search-query syntax treats `[`, `]`, `.`, `:`, and em
+        dashes as operators or word boundaries, so a real tech-debt
+        title (e.g., `[tech-debt] Foo.snapshot uses datetime.now(UTC)
+        — inject a Clock`) silently returned `[]` even when the issue
+        existed. Dedup never fired in production.
+
+        Pin the contract: the function must fetch all open tech-debt
+        issues (no `--search`) and filter exact matches in Python.
+        """
+        gh = _fake_gh_factory([_ok("[]")])
+        tech_debt.issue_exists("[tech-debt] Foo", gh_runner=gh)
+        self.assertNotIn(
+            "--search",
+            gh.calls[0],
+            f"`--search` must not appear in `gh issue list` args; got {gh.calls[0]!r}",
+        )
+
+    def test_matches_punctuated_title_in_full_list(self) -> None:
+        """Companion regression test for the v2.12.1 dedup fix.
+
+        With `--search` removed, the function fetches all open
+        tech-debt issues unfiltered. The punctuated title that used
+        to defeat the search must now match against the returned set.
+        """
+        title = (
+            "[tech-debt] EquityCalculator.snapshot uses datetime.now(UTC) — "
+            "inject a Clock when deterministic timestamps become load-bearing"
+        )
+        gh = _fake_gh_factory([_ok(json.dumps([{"title": title}, {"title": "[tech-debt] Other"}]))])
+        self.assertTrue(
+            tech_debt.issue_exists(title, gh_runner=gh),
+            "Exact-match filter must succeed against a title containing "
+            "brackets, dots, parens, and em dash — the punctuation that "
+            "broke `gh issue list --search` pre-fix.",
+        )
+
 
 class CreateIssueTests(unittest.TestCase):
     def test_success_returns_url(self) -> None:

@@ -348,11 +348,20 @@ The script also no-ops when the trailer block is absent or empty. Failures from 
 # metadata above; fall back to the conventional path otherwise (the
 # "PR already open" path skips that block, so the variable may be unset).
 REVIEW_FILE="${REVIEW_FILE:-reviews/$STORY_ID.md}"
-if [ -f "$REVIEW_FILE" ]; then
-    python3 "$RIG_PACK/.claude/sdlc-discipline/tech_debt.py" file \
+# Pack files ship under `overlay/per-provider/claude/.claude/sdlc-discipline/`
+# in both cache-based and in-tree pack imports. `$RIG_PACK` resolves to the
+# pack root; the `overlay/per-provider/claude/` prefix is required to reach
+# the actual file. (v2.11.0 through v2.12.0 mis-pathed this and silently
+# no-op'd via `|| true`; fixed in v2.12.1.)
+TECH_DEBT_PY="$RIG_PACK/overlay/per-provider/claude/.claude/sdlc-discipline/tech_debt.py"
+if [ -f "$REVIEW_FILE" ] && [ -f "$TECH_DEBT_PY" ]; then
+    python3 "$TECH_DEBT_PY" file \
         --review-file "$REVIEW_FILE" \
         --rig-root "$(pwd)" \
-        --pr-url "$PR_URL" || true
+        --pr-url "$PR_URL" \
+        || echo "[tech-debt] script ran but failed; not blocking finalizer" >&2
+elif [ -f "$REVIEW_FILE" ] && [ ! -f "$TECH_DEBT_PY" ]; then
+    echo "[tech-debt] script not found at $TECH_DEBT_PY; tech-debt automation skipped (check RIG_PACK and pack overlay materialization)" >&2
 fi
 ```
 
