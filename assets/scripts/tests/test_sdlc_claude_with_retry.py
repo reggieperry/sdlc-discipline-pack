@@ -583,5 +583,307 @@ class WrapperResumeTests(unittest.TestCase):
             )
 
 
+def _fake_claude_retry_py(tmp: Path) -> Path:
+    """Build a fake claude_retry.py that records its argv and returns EXIT_SUCCESS.
+
+    Used by env-resolution tests (sub-story 1b) where the assertion is about
+    WHAT the wrapper passes through to decide, not what decide computes. The
+    real claude_retry.py works end-to-end via fake bd; this fake isolates
+    the wrapper's argv-composition behavior.
+    """
+    path = tmp / "fake_claude_retry.py"
+    body = textwrap.dedent(
+        f"""\
+        #!/usr/bin/env python3
+        import sys
+        with open("{tmp}/retry-argv.log", "a") as f:
+            f.write(" ".join(sys.argv) + "\\n")
+        if "decide" in sys.argv:
+            print("EXIT_SUCCESS")
+        elif "build-prompt" in sys.argv:
+            print("You were interrupted. Check git status and your task list.")
+        sys.exit(0)
+        """
+    )
+    path.write_text(body)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
+class WrapperEnvResolutionTests(unittest.TestCase):
+    """Sub-story 1b — auto-resolve env vars from gc's standard context.
+
+    The wrapper's sub-story 1a contract requires SDLC_TEMPLATE and
+    CLAUDE_RETRY_PY env vars at startup. Production gc does NOT set
+    these — they're pack-side inventions. Without auto-resolution, every
+    pool spawn fails immediately on `set -u` when the rig opts in via
+    city.toml. This class pins the fallback rules so production opt-in
+    works.
+
+    STORY_ID stays required (gc sets it at agent spawn; absence is a
+    real misconfiguration).
+    """
+
+    def _build_env(
+        self,
+        tmp: Path,
+        *,
+        retry_py: Path,
+        sdlc_template: str | None = None,
+        gc_session_name: str | None = None,
+        claude_retry_py_override: str | None = None,
+    ) -> dict[str, str]:
+        """Compose env for an auto-resolution test.
+
+        Strips SDLC_TEMPLATE / CLAUDE_RETRY_PY / GC_SESSION_NAME from the
+        host environment by default; tests pass explicit values to opt
+        them in. CLAUDE_RETRY_PY defaults to the test fake unless the
+        test specifically wants auto-resolution to fire.
+        """
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"SDLC_TEMPLATE", "GC_SESSION_NAME", "CLAUDE_RETRY_PY"}
+        }
+        env["PATH"] = f"{tmp}{os.pathsep}{env.get('PATH', '')}"
+        env["STORY_ID"] = "el-fake"
+        env["SDLC_CLAUDE_SESSION_LOG"] = str(tmp / "session.jsonl")
+        env["SDLC_RETRY_SLEEP_OVERRIDE"] = "0"
+        if sdlc_template is not None:
+            env["SDLC_TEMPLATE"] = sdlc_template
+        if gc_session_name is not None:
+            env["GC_SESSION_NAME"] = gc_session_name
+        if claude_retry_py_override is not None:
+            env["CLAUDE_RETRY_PY"] = claude_retry_py_override
+        else:
+            env["CLAUDE_RETRY_PY"] = str(retry_py)
+        return env
+
+    def test_sdlc_template_auto_derives_from_gc_session_name(self) -> None:
+        """Cycle 1 — GC_SESSION_NAME=sdlc-discipline.worker-1 → template=worker.
+
+        Production gc sets GC_SESSION_NAME on every pool agent. The
+        wrapper must extract the template name from it when
+        SDLC_TEMPLATE is not explicitly set, otherwise opt-in via
+        city.toml [providers.claude] command breaks chain spawn.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp)
+            retry_py = _fake_claude_retry_py(tmp)
+            env = self._build_env(
+                tmp,
+                retry_py=retry_py,
+                sdlc_template=None,
+                gc_session_name="sdlc-discipline.worker-1",
+            )
+            result = subprocess.run(
+                [
+                    str(WRAPPER_PATH),
+                    "--print",
+                    "--session-id",
+                    "test-uuid",
+                    "hello",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"wrapper should run when SDLC_TEMPLATE auto-resolves from "
+                f"GC_SESSION_NAME; stderr={result.stderr!r}",
+            )
+            argv_log = (tmp / "retry-argv.log").read_text()
+            self.assertIn(
+                "--template worker",
+                argv_log,
+                f"wrapper should pass --template worker (derived from "
+                f"sdlc-discipline.worker-1) to claude_retry.py; "
+                f"got argv: {argv_log!r}",
+            )
+
+    def test_explicit_sdlc_template_wins_over_gc_session_name(self) -> None:
+        """Cycle 2 — operator override + test backward-compat.
+
+        When SDLC_TEMPLATE is explicitly set, it wins over any derivation
+        from GC_SESSION_NAME. Pins the invariant that test fixtures and
+        operator overrides remain authoritative.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp)
+            retry_py = _fake_claude_retry_py(tmp)
+            env = self._build_env(
+                tmp,
+                retry_py=retry_py,
+                sdlc_template="tester",  # explicit
+                gc_session_name="sdlc-discipline.worker-1",  # would derive "worker"
+            )
+            result = subprocess.run(
+                [
+                    str(WRAPPER_PATH),
+                    "--print",
+                    "--session-id",
+                    "test-uuid",
+                    "hello",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            argv_log = (tmp / "retry-argv.log").read_text()
+            self.assertIn(
+                "--template tester",
+                argv_log,
+                f"explicit SDLC_TEMPLATE=tester should override the worker "
+                f"derivation; got argv: {argv_log!r}",
+            )
+            self.assertNotIn(
+                "--template worker",
+                argv_log,
+                f"derived 'worker' must NOT appear when SDLC_TEMPLATE is "
+                f"explicitly 'tester'; got argv: {argv_log!r}",
+            )
+
+    def test_missing_both_sdlc_template_and_gc_session_name_exits_nonzero(
+        self,
+    ) -> None:
+        """Cycle 3 — fail loud when neither env is set.
+
+        A misconfigured caller (rig opt-in without gc, manual invocation
+        without env) should hit a clear error rather than the wrapper
+        silently running with an empty template that produces a wrong
+        decide call.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp)
+            retry_py = _fake_claude_retry_py(tmp)
+            env = self._build_env(
+                tmp,
+                retry_py=retry_py,
+                sdlc_template=None,
+                gc_session_name=None,
+            )
+            result = subprocess.run(
+                [
+                    str(WRAPPER_PATH),
+                    "--print",
+                    "--session-id",
+                    "test-uuid",
+                    "hello",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                f"wrapper must exit nonzero when neither SDLC_TEMPLATE "
+                f"nor GC_SESSION_NAME is set; got rc={result.returncode}",
+            )
+            self.assertIn(
+                "SDLC_TEMPLATE",
+                result.stderr,
+                f"stderr should mention SDLC_TEMPLATE; got: {result.stderr!r}",
+            )
+            self.assertIn(
+                "GC_SESSION_NAME",
+                result.stderr,
+                f"stderr should mention GC_SESSION_NAME as the alternative; got: {result.stderr!r}",
+            )
+
+    def test_claude_retry_py_auto_resolves_from_wrapper_location(self) -> None:
+        """Cycle 4 — CLAUDE_RETRY_PY auto-resolves to the bundled module path.
+
+        Production gc has no way to know where claude_retry.py lives. The
+        wrapper resolves it from its own location: the wrapper is at
+        `<pack>/assets/scripts/sdlc-claude-with-retry.sh`; the module is
+        at `<pack>/overlay/per-provider/claude/.claude/sdlc-discipline/
+        claude_retry.py`. Resolution path is `../../overlay/...` relative
+        to the wrapper.
+
+        Uses the REAL claude_retry.py + a fake bd configured to return a
+        step outside worker's phase list, so decide returns EXIT_SUCCESS
+        and the wrapper exits 0 on the first attempt.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp)
+            _fake_bd_with_step(
+                tmp, current_step="read-diff"
+            )  # reviewer's first step → handoff complete from worker
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in {"SDLC_TEMPLATE", "GC_SESSION_NAME", "CLAUDE_RETRY_PY"}
+            }
+            env["PATH"] = f"{tmp}{os.pathsep}{env.get('PATH', '')}"
+            env["STORY_ID"] = "el-fake"
+            env["SDLC_TEMPLATE"] = "worker"
+            # CLAUDE_RETRY_PY deliberately NOT set — exercises auto-resolution
+            result = subprocess.run(
+                [str(WRAPPER_PATH), "--print", "hello"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"wrapper should auto-resolve CLAUDE_RETRY_PY from its own "
+                f"location and exit 0; got rc={result.returncode} "
+                f"stderr={result.stderr!r}",
+            )
+
+    def test_explicit_claude_retry_py_wins_over_auto_resolution(self) -> None:
+        """Cycle 5 — operator override + test backward-compat.
+
+        Pins the invariant that explicit CLAUDE_RETRY_PY env wins over
+        the wrapper-relative auto-resolution. The 5 existing tests in
+        this file all set CLAUDE_RETRY_PY explicitly; this test ensures
+        a future regression in the if-guard ordering surfaces.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp)
+            retry_py = _fake_claude_retry_py(tmp)
+            env = self._build_env(
+                tmp,
+                retry_py=retry_py,
+                sdlc_template="worker",
+                claude_retry_py_override=str(retry_py),  # explicit fake
+            )
+            result = subprocess.run(
+                [
+                    str(WRAPPER_PATH),
+                    "--print",
+                    "--session-id",
+                    "test-uuid",
+                    "hello",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            argv_log = (tmp / "retry-argv.log").read_text()
+            self.assertTrue(
+                argv_log,
+                "fake claude_retry.py should have been invoked (proving "
+                "the explicit override won over auto-resolution); got "
+                "empty log",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
