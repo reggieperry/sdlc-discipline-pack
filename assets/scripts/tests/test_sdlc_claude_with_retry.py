@@ -885,5 +885,134 @@ class WrapperEnvResolutionTests(unittest.TestCase):
             )
 
 
+class WrapperPassThroughTests(unittest.TestCase):
+    """Sub-story 2 — passthrough mode when STORY_ID is unset.
+
+    A `[providers.claude] command = "<wrapper>"` block in city.toml is a
+    global override that applies to every claude spawn — pool agents AND
+    the mayor AND any freelance claude session. Only pool agents have
+    STORY_ID; the mayor does not. The wrapper must degrade to a direct
+    `exec claude "$@"` when STORY_ID is unset so the global override
+    does not strand non-pool claude spawns.
+
+    Without this guard, the mayor session dies on the wrapper's first
+    line (`STORY_ID:?STORY_ID env required`), tmux pane never reaches
+    claude's `❯` prompt, and gc's startup `waitForReady` times out at
+    60s with `resuming session: context deadline exceeded` — the exact
+    failure shape observed on T7920 on 2026-05-16 when pack #47 was
+    opted-in via `[providers.claude] command`.
+
+    The passthrough must also work without SDLC_TEMPLATE, without
+    GC_SESSION_NAME, without bd in PATH, and without any retry-machinery
+    env (CLAUDE_RETRY_PY, SDLC_CLAUDE_SESSION_LOG, SDLC_MAX_ATTEMPTS).
+    The mayor's runtime context guarantees none of those.
+    """
+
+    def test_unset_story_id_execs_claude_directly(self) -> None:
+        """STORY_ID unset → wrapper execs claude with the passed argv.
+
+        No bd binary on PATH (proves the wrapper does NOT call bd). No
+        SDLC_TEMPLATE / GC_SESSION_NAME / CLAUDE_RETRY_PY (proves the
+        wrapper does NOT enforce them in passthrough). Asserts claude
+        was invoked exactly once with the expected argv, and that the
+        wrapper exited with claude's exit code.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp, exit_code=0)
+            # NB: no _fake_bd here — passthrough must not call bd.
+
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k
+                not in {
+                    "STORY_ID",
+                    "SDLC_TEMPLATE",
+                    "GC_SESSION_NAME",
+                    "CLAUDE_RETRY_PY",
+                    "SDLC_CLAUDE_SESSION_LOG",
+                    "SDLC_MAX_ATTEMPTS",
+                }
+            }
+            env["PATH"] = f"{tmp}{os.pathsep}{env.get('PATH', '')}"
+
+            result = subprocess.run(
+                [
+                    str(WRAPPER_PATH),
+                    "--print",
+                    "--session-id",
+                    "mayor-uuid",
+                    "hello",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"wrapper should exit 0 (claude's exit code) when STORY_ID "
+                f"is unset; got rc={result.returncode} "
+                f"stderr={result.stderr!r}",
+            )
+
+            argv_log_path = tmp / "claude-argv.log"
+            self.assertTrue(
+                argv_log_path.exists(),
+                f"fake claude must have been invoked exactly once even "
+                f"without STORY_ID; argv log absent. stderr={result.stderr!r}",
+            )
+            invocations = argv_log_path.read_text().strip().splitlines()
+            self.assertEqual(
+                len(invocations),
+                1,
+                f"passthrough mode should invoke claude exactly once; "
+                f"got {len(invocations)}: {invocations}",
+            )
+            argv_line = invocations[0]
+            for expected in ("--print", "--session-id", "mayor-uuid", "hello"):
+                self.assertIn(
+                    expected,
+                    argv_line,
+                    f"argv {expected!r} should be passed through to claude "
+                    f"in passthrough mode; got: {argv_line!r}",
+                )
+
+    def test_unset_story_id_propagates_claude_exit_code(self) -> None:
+        """If claude exits nonzero, the wrapper's exit code matches it.
+
+        In passthrough mode there is no retry loop and no decide call.
+        The wrapper is a transparent shim, so its exit code is claude's.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            _fake_claude(tmp, exit_code=42)
+
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in {"STORY_ID", "SDLC_TEMPLATE", "GC_SESSION_NAME"}
+            }
+            env["PATH"] = f"{tmp}{os.pathsep}{env.get('PATH', '')}"
+
+            result = subprocess.run(
+                [str(WRAPPER_PATH), "--print", "hello"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(
+                result.returncode,
+                42,
+                f"wrapper should propagate claude's exit code in passthrough "
+                f"mode; got rc={result.returncode} stderr={result.stderr!r}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

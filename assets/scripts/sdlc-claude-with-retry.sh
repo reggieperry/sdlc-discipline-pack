@@ -17,9 +17,18 @@
 #                          exits 75 (EX_TEMPFAIL).
 #   RETRY <delay> <c>    — retry after sleeping `delay` seconds.
 #
-# Required env:
+# Two operating modes:
+#   Active mode — STORY_ID is set (pool agents). Full retry loop with
+#                 bd metadata writes and decide-call delegation.
+#   Passthrough — STORY_ID is unset (mayor, freelance claude sessions,
+#                 ACP transport). Wrapper execs claude directly with
+#                 the passed argv. Required because city.toml's
+#                 `[providers.claude] command` is a global override
+#                 applying to every claude spawn, not just pool agents.
+#
+# Required env (active mode only):
 #   STORY_ID          — bead ID of the story this template is working on.
-#                       gc sets this at agent spawn.
+#                       gc sets this at agent spawn. Unset → passthrough.
 #
 # Auto-resolved env (explicit value wins; production gc rarely sets these):
 #   SDLC_TEMPLATE     — pool template (worker/tester/reviewer/documenter/
@@ -42,6 +51,15 @@
 #   SDLC_MAX_ATTEMPTS          — attempts cap. Default 5.
 
 set -u
+
+# Passthrough mode: STORY_ID unset → no bead to track → exec claude
+# directly. `[providers.claude] command` is a global override; the
+# mayor and any freelance claude spawn pass through here without
+# STORY_ID and must not die on the `STORY_ID:?` line below (gc waits
+# 60s for claude's `❯` prompt before declaring the session dead).
+if [ -z "${STORY_ID:-}" ]; then
+    exec claude "$@"
+fi
 
 STORY_ID="${STORY_ID:?STORY_ID env required}"
 
