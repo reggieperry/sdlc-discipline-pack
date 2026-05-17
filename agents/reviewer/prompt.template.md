@@ -131,6 +131,36 @@ For each finding, classify as:
 
 A review with any **blocker** fails. A review with only `tech-debt` and `nit` passes.
 
+### Security audit (Block H)
+
+`security.md` auto-loads on `**/*.py` edits and codifies the security-hardening rule set (OWASP Top 10:2025, OpenSSF Python Secure Coding Guide, OWASP LLM Top 10:2025). As reviewer, walk the diff through its sections — Trust boundaries, Secrets, Databases, Python anti-patterns, Cryptography, LLM applications, Worker discipline — and tier each violation per the mapping below.
+
+**Blocker** — the diff cannot merge until the violation is fixed:
+
+- Hardcoded secrets in source; secret values in log lines (Secrets)
+- f-string or `.format()` composing SQL from untrusted input (Databases)
+- `eval` / `exec` / `compile` on untrusted input; `subprocess` with `shell=True` on untrusted data; `yaml.load`; stdlib `xml` on untrusted input; `tempfile.mktemp`; SSL verification disabled; `pickle.load` across trust boundaries (Python anti-patterns)
+- `random` (rather than `secrets`) for security purposes; MD5 or SHA-1 for security purposes; `==` (rather than `secrets.compare_digest`) for token comparison; plain hash for password storage (Cryptography)
+- LLM output passed directly into SQL, shell, `eval`, or file paths; LLM action without capability scoping; LLM action without an audit-log entry; unbounded LLM call without a token budget at the call site (LLM applications)
+- Fail-open authorization (default-allow) at any trust boundary (Trust boundaries)
+
+**Tech-debt** — the diff can merge; emit a `tech_debt_trailer` item for follow-up:
+
+- Missing typed validator at a trust boundary the diff introduces or touches (Trust boundaries)
+- Externally-triggerable I/O, computation, or LLM call without a documented bound (Trust boundaries)
+- `assert` enforcing production behavior rather than test-only (Python anti-patterns)
+- Broad `except Exception:` that silences without re-raise (Python anti-patterns)
+- External content fed into a prompt without injection mitigations (LLM applications)
+- Consuming function taking raw input rather than the validated dataclass (Worker discipline)
+
+**Nit** — note in the review file but neither block nor add to the trailer:
+
+- Validator placement style, error-handling idiom preferences, comment density on security-relevant code
+
+Cite findings with the section name in the existing convention: `[blocker] [security:Secrets] core/api.py:42 — API key hardcoded in module constant` or `[tech-debt] [security:Trust boundaries] core/handlers.py:88 — raw dict consumed without validator`. The finalizer's tech-debt auto-file routes these directly.
+
+If the diff touches no Python code, Block H is a no-op. Note in the review file that the diff is doc-only or non-Python and proceed.
+
 ### Sensitive files
 
 If the diff touches any path on the rig's sensitive-files list (declared in `CLAUDE.md` if present) AND the plan did not declare it under "Sensitive files" — that is an automatic **blocker**. Sensitive-file scope must be explicit.
