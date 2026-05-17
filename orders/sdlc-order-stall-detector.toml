@@ -1,0 +1,5 @@
+[order]
+description = "Periodic detection of cron-order missed fires. Reads `gc order list` for cooldown-trigger orders, reads `gc order history <name>` for each, and alerts via sdlc-notify.sh when an order's last fire is older than interval × 2. Throttles re-alerts per order for four hours. Catches the silent failure where a configured cron order stops firing — the motivating case is the rebase-watcher non-fire that ran silent for ~9 hours overnight in May 2026. Throttle state at $GC_CITY_ROOT/.gc/order-stall-state.json. Skip via SDLC_ORDER_STALL_DETECTOR_ENABLED=false."
+trigger = "cooldown"
+interval = "15m"
+exec = "$PACK_DIR/assets/scripts/sdlc-order-stall-detector.sh"

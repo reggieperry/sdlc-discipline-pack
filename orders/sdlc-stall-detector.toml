@@ -1,0 +1,5 @@
+[order]
+description = "Periodic detection of bead-phase SLO violations across registered rigs. For each in_progress chain bead, computes elapsed time in current_step against per-phase defaults (load-context 5m, plan 30m, workspace-setup 5m, implement 120m, self-audit 10m, submit-and-exit 10m, tester 15m, reviewer 20m, documenter 20m, finalizer 15m). Emits an operator email via sdlc-notify.sh when a bead exceeds its SLO. Throttles re-alerts on the same (bead, phase) for four hours. Skip via SDLC_STALL_DETECTOR_ENABLED=false."
+trigger = "cooldown"
+interval = "15m"
+exec = "$PACK_DIR/assets/scripts/sdlc-stall-detector.sh"
