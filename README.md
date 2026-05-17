@@ -388,9 +388,14 @@ Other notification paths (stall detection, order-fire stall detection) ship in f
 
 ## Claude retry wrapper (v2.12)
 
-Closes the chain-stall recovery loop. Chain pool workers can stall on two failure modes — per-turn duration cap (Mode B) and API 529 overload (Mode A) — exiting cleanly without completing handoff. The pool reconciler sees a running session that has finished driving but is alive in tmux; operator intervention is required to either nudge the agent or re-sling the bead.
+The wrapper sits between `gc`'s pool spawn and the `claude` binary. It has two operating modes:
 
-The wrapper sits between `gc`'s pool spawn and the `claude` binary. After each `claude` exit it delegates the retry-or-exit decision to `claude_retry.py`. On stall: re-spawns claude via `--resume <session-id>` with a continuation prompt and walks a per-cause sleep schedule. Writes `<template>.attempt_n`, `<template>.last_exit_cause`, and `<template>.state` (`running` / `resuming` / `exhausted`) to the bead per attempt — operator audit trail visible via `bd show <bead>`.
+- **Passthrough mode** (`STORY_ID` unset) — `exec claude "$@"` directly, no retry, no metadata writes. Fires on the mayor session, freelance claude sessions, and any pool agent (since `gc` does not currently inject `STORY_ID` into the spawn env).
+- **Active mode** (`STORY_ID` set) — runs `claude` as a subprocess; on exit, delegates a retry-or-exit decision to `claude_retry.py`. On stall, re-spawns via `claude --resume <session-id>` with a continuation prompt and a per-cause sleep schedule. Writes `<template>.attempt_n`, `<template>.last_exit_cause`, and `<template>.state` to the bead per attempt for operator audit via `bd show <bead>`.
+
+**Operational state in v2.12.0**: every spawn fires in passthrough mode. The retry loop is code-present but dormant — gc's spawn env does not include `STORY_ID`, and pool agents set it themselves only after claiming a bead inside their claude sessions (too late for the wrapper). The supervisor's zombie-detect-and-recreate path (`internal/runtime/tmux/adapter.go:920-937`) handles chain stalls today by respawning sessions with the same name, which restores the bead's `assignee` binding. The decision to leave retry dormant lives in issue #63 — reopen it when operational data (529-storm frequency, idempotence of per-turn-cap stalls, supervisor-respawn cost per stall) justifies the redesign.
+
+**What this still gives you**: the passthrough guard prevents the chain-breaking failure mode the 2026-05-16 T7920 outage demonstrated, where a global `[providers.claude] command` override broke every claude spawn (mayor included) on the wrapper's `STORY_ID:?` line. The wrapper is safe to opt in to globally; absent `STORY_ID`, it gets out of the way.
 
 ### How a rig opts in
 
@@ -407,14 +412,16 @@ path_check = "claude"
 
 The `command` path is the wrapper's location in the pack cache — for path-based imports the cache prefix is set at install time and is stable. Find it via `ls -d <workspace>/.gc/cache/includes/sdlc-discipline-pack-*/assets/scripts/sdlc-claude-with-retry.sh`.
 
+Before flipping the opt-in on a production rig, run `bash assets/scripts/sdlc-smoke-test-claude-wrapper.sh` against the deployed cache. The script stands up a real tmux session with a fake claude binary and asserts the wrapper reaches the readiness prompt in both passthrough and active scenarios. The 2026-05-16 incident's regression-prevention test.
+
 ### What's auto-resolved
 
-The wrapper auto-resolves two pack-side env vars so the rig's `city.toml` doesn't have to thread them:
+The wrapper auto-resolves two pack-side env vars so the rig's `city.toml` doesn't have to thread them. Both fire only in active mode (i.e., after `STORY_ID` is in env, which is not the case today):
 
 - `SDLC_TEMPLATE` — derived from `GC_SESSION_NAME` (e.g., `sdlc-discipline.worker-1` → `worker`). gc sets `GC_SESSION_NAME` on every pool agent.
 - `CLAUDE_RETRY_PY` — resolved relative to the wrapper's own location.
 
-`STORY_ID` is read from gc's spawn-time env directly and stays required.
+`STORY_ID` is read from gc's spawn-time env. When unset, the wrapper passthroughs.
 
 ### What's configurable
 
@@ -521,6 +528,10 @@ Schema 2. Pack version follows semver:
 
 Entries list the headline change for each tagged release, newest first.
 
+- **v2.12.0** — three PRs accumulated on `main` since v2.11.0. Tagged 2026-05-16. Scope unit: pack #47 wrapper opt-in safe for production rigs after the T7920 incident the same day, plus a code-orphan rules module for the planned classifier orchestrator. Remaining open issues (#32 sub-B/C, #44 sub-4/5, #36 sub-2, #38, #39, #45, #46, #63) carry forward.
+  - PR #60 — README opt-in instructions for the pack #47 claude-retry wrapper. Operator-facing setup guidance.
+  - PR #61 (issue #32 sub-A) — `overlay/per-provider/claude/.claude/sdlc-discipline/tech_debt_classifier.py` ships the deterministic rules module (`autofix-safe` / `needs-human` / `defer-to-llm` verdicts on tech-debt trailer items). Code-orphan in v2.12.0 — sub-B (LLM fallback) and sub-C (orchestrator) not yet built, so the classifier isn't wired into chain machinery.
+  - PR #62 (issue #47 sub-2 + sub-3) — wrapper passthrough guard fixes the 2026-05-16 T7920 outage where the global `[providers.claude] command` override broke every claude spawn (mayor included) on the wrapper's `STORY_ID:?` line. New `assets/scripts/sdlc-smoke-test-claude-wrapper.sh` provides a tmux-based spawn-shape integration test that catches this bug class before any production opt-in. Wrapper retry remains dormant by design (per issue #63's decision) — pool agents pass through to claude directly because `STORY_ID` is not in the spawn env; supervisor zombie-detect-and-recreate handles stalls. The opt-in is operationally safe; the retry feature is deferred until empirical data justifies the redesign.
 - **v2.11.0** — six PRs accumulated on `main` since v2.10.0. Tagged 2026-05-16; remaining open issues (#36 sub-2, #38, #39, #45, #46) moved to v2.12+. The 2026-05-16 release of accumulated v2.11 scope.
   - PR #37 (issue #34) — rebase-watcher `CONFLICTING` handling and sweeper rig-enumeration fix; the v2.7.0 watcher's missed-fire under the observed concurrent-conflict pattern closes.
   - PR #40 (issue #35) — `NEXT` sentinel for numbered-catalog ID assignment in worker output. Worker substitutes the next free integer at plan time; removes a class of false-conflict where two parallel chains chose the same catalog ID.
