@@ -22,9 +22,26 @@ if [ "${SDLC_ORDER_STALL_DETECTOR_ENABLED:-true}" != "true" ]; then
 fi
 
 CITY_ROOT="${GC_CITY_ROOT:-}"
-if [ -z "$CITY_ROOT" ] || [ ! -d "$CITY_ROOT" ]; then
-    echo "sdlc-order-stall-detector: GC_CITY_ROOT not set or missing" >&2
-    exit 0
+if [ -z "$CITY_ROOT" ] || [ ! -f "$CITY_ROOT/city.toml" ]; then
+    # Walk up from PWD first — works if the controller fires from inside the city.
+    probe="$PWD"
+    while [ "$probe" != "/" ] && [ -n "$probe" ]; do
+        if [ -f "$probe/city.toml" ]; then
+            CITY_ROOT="$probe"
+            break
+        fi
+        probe="$(dirname "$probe")"
+    done
+fi
+if [ -z "$CITY_ROOT" ] || [ ! -f "$CITY_ROOT/city.toml" ]; then
+    # Fall back to asking the supervisor for registered cities. When the
+    # controller fires from a rig dir (sibling of the city), walk-up
+    # misses; `gc cities` always knows the answer.
+    CITY_ROOT="$(gc cities 2>/dev/null | awk 'NR>1 {print $2; exit}')"
+fi
+if [ -z "$CITY_ROOT" ] || [ ! -d "$CITY_ROOT" ] || [ ! -f "$CITY_ROOT/city.toml" ]; then
+    echo "sdlc-order-stall-detector: cannot resolve city root (GC_CITY_ROOT='${GC_CITY_ROOT:-}' PWD='$PWD'); aborting" >&2
+    exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
