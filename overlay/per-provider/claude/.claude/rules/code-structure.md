@@ -24,6 +24,35 @@ paths:
 ## Bounded contexts
 - Each module serves one bounded context. Don't mix contexts in one file.
 
+## Object style (peers, composition, context independence)
+
+- **Peer stereotypes.** Every collaborator is one of: *dependency* (required service, constructor parameter, no default), *notification* (fire-and-forget listener, default to no-op), *adjustment* (policy/strategy, default to sensible value). A bloated constructor usually conflates the three — re-categorize before splitting.
+- **Composite simpler than the sum of its parts.** A composite's public surface is narrower than the union of its components'. `editor.set_value(money)`, not `editor.set_amount_field(...).set_currency_field(...)`. Exposing the parts means the composite is a leaky wrapper.
+- **Context independence.** An object holds no built-in knowledge of the system it runs in. Whatever it needs about the larger environment is passed in (construction or method argument). A class using vocabulary from two domains is probably violating this — exceptions are bridging adapters whose stated purpose is translation.
+- **No And's, Or's, or But's.** Describe what an object does in one sentence without a conjunction. "Loads documents AND parses them" is two objects. "Dispatches OR caches" is two objects. When the description needs an "and," split.
+- **Encapsulation and information hiding are different.** Encapsulation bounds the blast radius of a change (all interaction through the API). Information hiding conceals *how* behind *what* so callers reason at the level of intent. Getters/setters on every field give the first without the second.
+
+## Simplicity calibration
+
+"As simple as possible, but no simpler." Two failure modes the principle guards against:
+
+- *Over-engineering* — frameworks, indirection layers, configuration knobs added without a concrete need.
+- *Under-engineering* — happy-path-only code that skips idempotency, error isolation, or audit needed for production.
+
+When proposing an approach, name the simpler option first. Add complexity only when the cheaper alternative paints into a corner. The "but no simpler" half is load-bearing — idempotency, optimistic concurrency, error isolation, and audit are the floor, not optimizations.
+
+## Module depth and complexity (Ousterhout)
+
+- **Judge a module by depth.** Functionality hidden divided by interface surface. A deep module exposes a small interface that hides substantial implementation. A shallow module's interface roughly mirrors what it wraps. Small ≠ simple; shallow modules pay an interface cost without earning the encapsulation benefit.
+- **Kill pass-through methods.** A method that just forwards args to another with a near-identical signature is two layers sharing a responsibility neither owns. Pick one: expose the lower layer, push real work into the wrapper, or merge the layers.
+- **Kill pass-through variables.** An argument threaded through three or more frames is a pass-through variable. Introduce a context object the caller injects; don't thread it by signature or smuggle it via globals.
+- **Pull complexity downwards.** A module has more callers than implementers; the implementer suffers so callers don't. Don't export a knob when a strong default would do. Export only when a runtime operator will tune the value.
+- **General-purpose interfaces are deeper.** Specialization in a middle-layer interface leaks the caller's vocabulary down. Push specialization up to the application boundary or down into a driver, not into the middle. Ask: "what's the simplest interface covering all current needs; in how many situations will this method be used?"
+- **Decompose by knowledge, not by execution order.** Modules named `loader`, `parser`, `writer`, `validator` are red-flag verbs implying ordering. Order belongs in the orchestrator that owns the sequence; stage modules organize by what knowledge they encapsulate. If two stages share a domain concept, the concept lives in a module both call.
+- **Define errors out of existence.** In priority order: redefine the operation so the error case is the normal case; mask the exception in a low-level module; aggregate handlers at the boundary; crash for unrecoverable failures. A method dotted with `try/except` is usually leaking abstraction; consolidate.
+- **Comments and names as design diagnostics.** Write the interface doc before the body. If the doc drifts past four lines, leaks internal collaborators, or you can't pick a precise name for a variable, that's design feedback — refactor the design, not the comment.
+- **Design every nontrivial module twice.** When work runs more than a day, sketch a one-paragraph alternative — even a deliberately bad one — and contrast. The act of contrast surfaces what makes the chosen design good. Capture the considered alternatives in the PR description or ADR.
+
 ## Testing principles
 - Coverage floor: 60% (enforced by pytest-cov). Target: 80% for core logic.
 - Every new public function gets at least one test.

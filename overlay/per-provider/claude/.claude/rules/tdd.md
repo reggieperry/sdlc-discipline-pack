@@ -71,6 +71,15 @@ When a test is hard to write, the design has a problem. Don't work around it; re
 | Want to test exact log lines | Logging mixed with domain logic | Domain notification interface (`cost_ledger.charge_llm_cost(...)`); logger is one impl |
 | Adding setters to SUT just for testing | Constructor injection missing | Inject through constructor; remove the setters |
 
+## Claims in prose need tests behind them
+
+Words like *idempotent*, *no-op on retry*, *cancellation-safe*, *bounded*, *degraded mode*, *graceful fallback*, *safe to re-run* are specifications. If the test that exercises the path doesn't exist, the claim is aspirational and probably wrong.
+
+- When writing a docstring or comment that says the code handles a fallback / degraded mode / failure case, immediately ask: does a test exercise that path? If yes, the prose should align with the test. If no, either write the test or soften the prose ("intended to be" / "TODO: verify under X").
+- A "no-op" claim that hasn't been triggered is asserted, not proven. Degraded-mode paths are the ones most likely to run unexpectedly in production — they're exactly the ones that need to actually work.
+- The opposite trap: don't put aspirational behavior in docstrings as if it's how the code works. Aspirational text belongs in TODOs or design notes, not in the function's description of itself.
+- Tests proving cancellation-safety must actually invoke cancellation and inspect the durable record afterward. Tests proving a cap must drive the function past the cap and assert the no-op. Tests proving idempotency must invoke twice and inspect the resulting state — see `concurrency.md` for the three idempotency invariants.
+
 ## Test names describe behaviors
 
 `test_2pct_rule_rejects_oversized_proposal` — yes.

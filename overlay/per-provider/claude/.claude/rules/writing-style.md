@@ -52,3 +52,13 @@ Bullets for parallel items where order does not matter or where visual scan help
 Tables for comparison along consistent dimensions. Avoid tables when prose would be clearer.
 
 Code in fenced blocks with language identifiers. API identifiers preserved in their canonical form (`claude-sonnet-4-6` in code, "Claude Sonnet 4.6" in prose).
+
+## PR descriptions, commit messages, issue comments
+
+This file's `paths` frontmatter doesn't fire on these surfaces, but the same register applies. Apply explicitly:
+
+- Lead with what changed and why; lean on the diff for the how. Compact bullets over essays. Trim adjective ladders ("complete and robust and durable" → say what it does).
+- Cite only artifacts a reviewer can actually open: files in this repo, sibling PRs, issue numbers. Do not reference session-local artifacts (a plan memo you wrote during the session, an analysis you didn't commit, a design note that lives only in your scratch directory) — those produce dead links and force readers to take claims on faith.
+- Stable IDs survive the prose: include them where they help (story IDs, issue numbers), but don't fabricate them. If unsure of an identifier, verify it via tool call before citing.
+- Checkboxes (`- [ ]`) are for tracked items that will be checked off. Non-tracked lists use plain bullets — checkboxes drift to "abandoned" when nobody owns the checking.
+- For commit messages: symptom + cause + fix + validation, in that order. The "why" earns its keep in the body; the title states the change. Closes/Fixes footers use the issue number, not a paraphrase.

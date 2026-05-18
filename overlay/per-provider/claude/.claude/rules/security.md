@@ -12,6 +12,20 @@ Discipline for writing code that resists the failure modes cataloged by OWASP To
 - Fail closed. Error paths default to deny, not allow. Authorization checks must affirmatively grant; absence is denial. (CWE-755)
 - Least privilege. Code requests the minimum capability it needs. Use the pipeline's capability primitive (`StageCoordinator` permission scope) rather than ambient access. (CWE-272)
 - Resource limits. Any externally-triggerable I/O, computation, or LLM call has an explicit bound: timeout, byte cap, token cap. (CWE-400)
+- Bound string lengths at the trust boundary. Any string field crossing into the system from a request, document, or LLM response carries an explicit length cap. Without the cap, structured-output mode guarantees shape but not size, and a hallucinated or adversarial response lands verbatim in storage. Cap arrays at the schema layer too — every untrusted array carries an explicit element-count limit; the consumer re-checks defensively.
+- Bound the fan-out. Any concurrent batch whose size depends on request input runs behind a semaphore. Long-running orchestrators have a module-level cap on concurrent runs. Unbounded fan-out × paid external calls = cost amplification and gateway denial-of-service.
+
+## External calls
+
+- Every external call constructs its client with an explicit `timeout=`. Default SDK timeouts are often measured in minutes — assume they're wrong until you've checked. (CWE-400)
+- Per-unit-of-work coroutines wrap the call with a deadline matching the operational SLA, not the SDK default.
+- Cap retry attempts and add a cooldown gate. A doomed input must not loop forever consuming budget. The retry layer reuses the same idempotency key across attempts — see `concurrency.md`.
+
+## Error-message sanitization
+
+Error-message columns that flow out via an HTTP endpoint, audit log, or operator-visible surface must contain only the exception class name (plus a correlation ID), never the exception's full string. SDK exception strings carry sensitive content: gateway URLs, request bodies, DSNs, query parameters, retrieved document fragments. The full detail goes to a server-side logger with `exception_info`; the surfaced field carries just `type(exc).__name__`. (CWE-209)
+
+If operators need to correlate the surfaced message with the full log line, generate a correlation ID at error time and store *that* in the visible field. Don't pipe the exception string through.
 
 ## Secrets
 
@@ -21,6 +35,20 @@ Discipline for writing code that resists the failure modes cataloged by OWASP To
 ## Databases
 
 - Parameterized queries only. Never f-string or `.format()` into SQL — use the driver's parameter substitution (`psycopg`'s `%s`, SQLAlchemy bound parameters, etc.). (CWE-89)
+- Identifiers (schema, table, column names) that come from request data are filtered against an allow-list before interpolation. Driver parameter substitution binds *values*, not *identifiers*. (CWE-89)
+
+## Migrations are symmetric
+
+Upgrade and downgrade are equal-weight code paths. Both get the same rigor.
+
+- Every foreign key carries an explicit `ondelete` policy (cascade / restrict). No default-without-thinking.
+- Every drop-table or destructive downgrade against a table that may hold analyst-corrected, audit-trail, or regulatory-mandated data queries for that data first and refuses with a clear message if non-zero rows exist. An operator-visible refusal is better than silent data loss.
+- Every migration that adds a new table appears in the migration-registry / expected-set the validation script consults. Mismatch is a CI failure, not a deployment surprise.
+- Upgrade-head + downgrade-base end-to-end on a fresh local store before pushing — verifies the downgrade is real, not a stub.
+
+## Disabled safeguards carry a visible re-enable marker
+
+Any production safeguard that ships disabled or commented-out carries a marker the reviewer and the chain can grep for. Examples: a commented-out auth check, an RBAC default-allow placeholder, an open-CORS default, a stub permission decorator. The marker names the safeguard, names the condition under which it gets re-enabled, and the ticket or story that re-enables it. Undecorated commented-out safeguards drift into permanent residue — the reviewer phase treats an undecorated disabled-safeguard pattern as BLOCKING regardless of severity.
 
 ## Python anti-patterns
 

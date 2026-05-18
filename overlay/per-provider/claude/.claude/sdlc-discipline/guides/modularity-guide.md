@@ -413,9 +413,107 @@ Run this against any level (and every module that implements it) before declarin
 
 A level that fails any item is not finished, no matter how green its tests are.
 
+## 14. Ousterhout's complementary frame
+
+Liskov's 1973 *Guidelines* and Ousterhout's *A Philosophy of Software Design* (2nd ed, 2018) reach the same destination from different starting points. Liskov starts from reliability and the test-budget arithmetic; Ousterhout starts from complexity as the operational tax that change amplification, cognitive load, and unknown-unknowns levy on a codebase. The vocabularies translate.
+
+Ousterhout's operational definition: **complexity = obscurity + dependencies**, weighted by edit frequency. It manifests as change amplification (a small functional change requires edits in many places), cognitive load (a reader needs to hold many facts in mind to make a change correctly), and unknown unknowns (a reader cannot tell what they need to know). Liskov's connection-as-assumption rule (§6.1) and the reliability arithmetic (§1.3) are the same claim from the reliability side.
+
+### 14.1 Depth as the operational measure of a level
+
+> "Modules should be deep: their interfaces should be much simpler than their implementations." (Ousterhout, Ch 4.)
+
+Depth equals functionality hidden divided by interface surface. A *deep* module hides substantial implementation behind a narrow interface. A *shallow* module's interface roughly mirrors what it wraps; the interface cost is paid without the encapsulation benefit. Small is not the same as simple — a tiny shallow class around one DB call is shallower than a fat one with rich behavior.
+
+This is the operational test for Liskov's §1.3 reliability arithmetic. A level with a fat interface and thin implementation does not reduce the test-case count; it just renames the testing surface. The two framings converge: depth is what makes additive (rather than multiplicative) test budgets achievable.
+
+### 14.2 Pass-through methods and pass-through variables
+
+Ousterhout names two recurring shallow-module shapes:
+
+- **Pass-through method.** A method that forwards args to another method with a near-identical signature. Two layers share a responsibility neither owns cleanly. Pick one: expose the lower layer directly, push real work into the wrapper, or merge.
+- **Pass-through variable.** An argument threaded through three or more frames as a function argument that none of the intermediate frames inspect. Introduce a context object the caller injects; don't smuggle the value through ambient state.
+
+Both shapes add interface surface without adding functionality. Liskov's connection rule (§6.1) flags them indirectly — the connection assumption "you must remember to forward this value" is part of the contract every intermediate frame depends on, even though it doesn't appear in any one signature explicitly.
+
+### 14.3 Pull complexity downwards
+
+> "Most modules have more users than developers, so it is better for the developers to suffer than the users." (Ch 8.)
+
+The decision is about who pays the cost of a knob. Before exporting a configuration parameter or a constructor argument, ask whether a sensible default could be computed from observed behavior. Only export a knob when a runtime operator will tune it and the caller genuinely knows more than this module ever will.
+
+Symptoms of leaked complexity upward: callers consistently passing the same value; defaults that "no one would change"; init signatures that read like API documentation rather than dependency lists.
+
+This complements `code-structure.md`'s "configuration is part of the public API" — that rule says *expose* the knob when it's tunable at runtime; this rule says *don't invent* the knob when a default would do. The deciding question: would a different value of this knob change observed behavior in production? If yes, expose. If "no, we just want it configurable for testing," default it strongly and let tests override.
+
+### 14.4 General-purpose interfaces are deeper
+
+> "General-purpose modules are deeper." (Ch 6.)
+
+Specialization in a middle-layer interface (`backspace(cursor)` vs `delete(range)`) leaks the caller's vocabulary down and creates information leakage. Push specialization up to the application boundary or down into a driver — not into the middle.
+
+When sketching a new module, ask three questions:
+
+1. What's the simplest interface that covers all my current needs?
+2. In how many situations will this method be used?
+3. Is the API still easy to use for today's caller?
+
+If a method has one caller and its name encodes that caller's intent, refactor to a more primitive operation and move the intent up to the caller. This is the same move Liskov §2.3.1 calls "generalization via common functions" — Ousterhout sharpens it with the heuristic that the *name* is the diagnostic.
+
+### 14.5 Don't decompose by execution order
+
+> "Temporal decomposition." (Ch 5.)
+
+Modules named `loader`, `parser`, `writer`, `validator` are red-flag verbs implying ordering. The orchestration spine is the legitimate place for time-ordering — it owns the sequence. Stage modules are organized by *what knowledge they encapsulate*, not *when they run*. If two stages share a domain concept, the concept lives in a third module owned by neither, called by both.
+
+This is `code-structure.md`'s bounded-context rule from a different angle. A bounded context groups by domain knowledge; a temporal decomposition groups by sequence position. The first is stable across requirements changes; the second rots when the sequence changes.
+
+### 14.6 Define errors out of existence
+
+> "Define errors out of existence." (Ch 10.)
+
+Each exception block answers "does the caller have a meaningful action?" The techniques in priority order:
+
+1. **Redefine the operation** so the error case is the normal case. Removing an entry from a set succeeds whether or not it was present.
+2. **Mask the exception** in a low-level module. TCP retransmits a lost segment; the application doesn't see it.
+3. **Aggregate handlers** at the application boundary. One top-level catch translates many exception types to one outcome.
+4. **Crash** for unrecoverable failures. A process whose invariants are violated should not continue.
+
+A method dotted with `try/except` blocks is usually leaking abstraction — the cases the inner method exposes are cases the outer method has to translate. Consolidate.
+
+Liskov §11 has the formal version: a method's post-condition includes its exception behavior, and a subtype's post-conditions must be no weaker. Ousterhout's frame asks the design-time question that Liskov's frame answers at the contract level: should this be an exception in the first place?
+
+### 14.7 Comments and names as design diagnostics
+
+> "Comments are a design tool." (Ch 15.)
+
+Write the interface docstring before the body. If the docstring drifts past about four lines, leaks internal collaborators, or you can't pick a precise name for a variable, that's design feedback. Refactor the design, not the comment.
+
+Two specific diagnostics:
+
+- **"Hard to describe."** A function whose docstring requires "this method is called by X after Y has set Z" has a wrong boundary. The implementation context is leaking into the contract.
+- **"Hard to pick a name."** When a name needs a class prefix to make sense (`File.fileBlock`), drop the prefix. When two variables of "the same kind" carry different invariants (logical block vs physical block, raw vs URL-decoded), encode the distinction in the name or in distinct types.
+
+This is the operational complement to Liskov's §7 specification discipline. Liskov says the specification must exist; Ousterhout adds that the *act of writing the specification* is what tests the design.
+
+### 14.8 Design every nontrivial module twice
+
+> "Design it twice." (Ch 11.)
+
+When the work runs more than a day, sketch a one-paragraph alternative — even a deliberately bad one — and compare. The act of contrast surfaces what makes the chosen design good. Ousterhout argues most engineers skip this because it feels wasteful; the contrast is exactly what gives you signal that the first design wasn't obvious-by-accident.
+
+Capture the considered alternatives in the PR description or ADR. One paragraph each, with pros and cons. Pairs with `refactoring.md`'s preparatory-refactoring discipline — design-twice is how you tell whether the simpler design has painted into a corner before you commit to it.
+
+### 14.9 Where Ousterhout and the rest of this pack disagree
+
+Ousterhout is hostile to TDD (Ch 19.4) — he reads it as fragmenting design thinking into too-small steps. This pack reads `tdd.md` and `goos-guide.md` as the stronger position: tests are the design oracle, and the dialog between design-as-listening and design-as-thinking is more productive than either pole alone. Where the two methods conflict, the pack follows GOOS; Ousterhout's complexity vocabulary remains useful as the *judging* surface that test-pain alone can miss.
+
+Strategic vs tactical programming (Ch 3) is covered indirectly by the pack's broader posture — most work in a chained-agent context is tactical (one story at a time), but the modularity, refactoring, and DDD rules force occasional strategic moves at scope boundaries.
+
 ## Sources
 
 - Liskov, B. H. (1973). *Guidelines for the Design and Implementation of Reliable Software Systems.* MITRE Corporation, ESD-TR-72-164 / MTR-2345 / DTIC AD0757905. The spine of this guide; all section-by-section page citations refer to this report.
+- Ousterhout, J. (2018). *A Philosophy of Software Design*, 2nd edition. Yaknyam Press. The §14 frame; Ch 4 (depth), Ch 6 (general-purpose), Ch 7 (different layer, different abstraction), Ch 8 (pull complexity downwards), Ch 10 (errors out of existence), Ch 11 (design twice), Ch 12-15 (comments and names).
 - Parnas, D. L. (1972). *On the Criteria to Be Used in Decomposing Systems into Modules.* CACM. The connection-as-assumption definition that Liskov adopts.
 - Liskov, B. H., Wing, J. (1994). *A Behavioral Notion of Subtyping.* ACM TOPLAS. The formal LSP statement used in §11. Distinct from *Guidelines.*
 - MacQueen, D. (1984). *Modules for Standard ML.* LFP. Origin of signature/structure/functor.

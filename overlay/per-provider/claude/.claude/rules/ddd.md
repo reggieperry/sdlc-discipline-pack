@@ -40,12 +40,35 @@ The 2% Rule, 6% Rule, Triple Screen, Impulse System, Trade Apgar, ABC Rating, QA
 ## Aggregates
 
 - One root per aggregate. External code holds references to the root only. Internal entities have local identity.
-- Cross-aggregate references are by ID, never by Python reference.
+- Cross-aggregate references are by ID, never by in-memory reference.
 - All invariants of the aggregate are satisfied at every committed state.
 - A single transaction commits one aggregate; cross-aggregate consistency is eventual.
 - Only aggregate roots are queried directly through repositories.
 
 Elder aggregates: `AccountState` (open positions + equity, enforces 2% and 6% Rules), `Trade` (filled, with entry/exit/fills/commissions), `Run` (pipeline execution + decisions + costs), `TradeProposal` (constructable only through `account.evaluate_proposal`).
+
+## Consistency boundary and aggregate sizing
+
+Pick the aggregate by naming the multi-row invariant it must defend, then size the transaction to exactly that boundary. For each persistence function, write one line of doc:
+
+> Aggregate: `<name>`. Invariant: `<plain English>`. Boundary: `<lock or constraint that enforces it>`.
+
+If several persistence functions share an aggregate, lock the parent once at the orchestrator and pass the locked context down — don't lock per call. Wrong size shows up as deadlocks (boundary too big) or write skew (boundary too small). See `concurrency.md` for the defense catalog.
+
+## Commands and events — different failure semantics
+
+Tag each step in a workflow as `COMMAND` or `EVENT`. They are not interchangeable:
+
+- **Command** runs user-visible work. It may raise; failure aborts the surrounding flow and bubbles to the caller. Examples: place an order, charge a payment, transition a status.
+- **Event** does bookkeeping or notification. It must not abort the surrounding command on failure. Examples: write to an audit log, refresh a derived view, notify a downstream listener.
+
+No message bus is required to apply the discipline — route the exception handling explicitly. Commands re-raise into the runner's failure path. Events log-and-continue and never abort the surrounding command. The test must drive each event-handler failure and assert the command still succeeds.
+
+## Payloads stay simple value objects
+
+Every event, command, and inter-stage payload is a frozen value object — fields and equality, no behavior. Transformations belong in handlers or normalizer functions, not as methods on the value. Keeping payloads simple means they can be logged-and-replayed, serialized across process boundaries without ceremony, and constructed as test fixtures with minimal setup.
+
+If a payload starts growing helper methods (`payload.normalize()`, `payload.with_attempt(n)`), extract them to module-level functions. Builders for tests return fully-valid payload values; see `tdd.md` for the builder pattern.
 
 ## Factories
 
