@@ -334,19 +334,20 @@ The `|| true` inside the helper function is load-bearing: a missing `msmtp`, an 
 
 ## Tech-debt automation
 
-After the merge gate completes (merge or park), file any `[tech-debt]` items captured by the reviewer's `tech_debt_trailer` JSON block as GitHub issues. The hook is a no-op unless the rig opts in via `architecture.toml`:
+After the merge gate completes (merge or park), file any `[tech-debt]` items captured by the reviewer's `tech_debt_trailer` JSON block as GitHub issues. **Run the bash block below verbatim.** The script handles all of its own gate logic internally — including the `architecture.toml` opt-in check, the trailer-block-present check, and the per-item dedup against existing open `tech-debt`-labeled issues. Do NOT add `architecture.toml` lookups, `grep` checks, or other gate conditionals around the script invocation. The script self-gates on:
 
-```toml
-[tech_debt_automation]
-enabled = true
-```
+- The rig's `architecture.toml` opt-in (path-walked: `.claude/rules/project/architecture.toml` then top-level — handled by `tech_debt.py:is_enabled()`).
+- The trailer block being present and non-empty in the review file.
+- Each item being non-duplicate against existing open `tech-debt`-labeled issues.
 
-The script also no-ops when the trailer block is absent or empty. Failures from `gh` are logged to stderr but do not fail the finalizer step — the PR is already merged or parked at this point; the issue-filing is post-hoc capture.
+If the script's own check fails any of these, it prints a `[tech-debt] disabled ...` or `[tech-debt] no trailer ...` line and exits 0. The finalizer continues. Failures from `gh` are logged to stderr but do not fail the finalizer step — the PR is already merged or parked at this point; the issue-filing is post-hoc capture.
 
 ```bash
-# Respect REVIEW_FILE if the "Open the PR" block set it from bead
-# metadata above; fall back to the conventional path otherwise (the
-# "PR already open" path skips that block, so the variable may be unset).
+# Run this block verbatim. The script handles its own architecture.toml gate;
+# do not add an additional grep/check here. (See pack #82: the LLM-added gate
+# check on EL-089's finalizer run greps for architecture.toml in cwd, but
+# rigs may keep it at .claude/rules/project/architecture.toml — the script's
+# is_enabled() handles both paths correctly.)
 REVIEW_FILE="${REVIEW_FILE:-reviews/$STORY_ID.md}"
 # Pack files ship under `overlay/per-provider/claude/.claude/sdlc-discipline/`
 # in both cache-based and in-tree pack imports. `$RIG_PACK` resolves to the
