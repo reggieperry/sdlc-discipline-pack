@@ -55,6 +55,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 _DEFAULT_SLOS_MINUTES = {
@@ -199,6 +200,158 @@ def render_email_body(alert: StallAlert) -> tuple[str, str]:
     return subject, body
 
 
+def _project_key(rig_root: Path) -> str:
+    """Compute the Claude Code project-key directory name for a rig path.
+
+    Claude Code stores per-project session JSONLs at
+    `~/.claude/projects/<project-key>/`. The key is the absolute rig path
+    with `/`, `.`, and `_` normalized to `-`, preceded by a leading `-`.
+    Matches `snapshot_operator_memory.py`'s normalization (per v2.13.1).
+    """
+    normalized = str(rig_root.resolve())
+    for ch in ("/", ".", "_"):
+        normalized = normalized.replace(ch, "-")
+    return normalized if normalized.startswith("-") else "-" + normalized
+
+
+def _session_mentions_bead(path: Path, bead_id: str) -> bool:
+    """Return True if any line of `path` contains the bead id (line-streamed)."""
+    try:
+        with path.open("r", errors="replace") as fh:
+            for line in fh:
+                if bead_id in line:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def find_session_jsonl(
+    bead_id: str,
+    rig_root: Path,
+    *,
+    home: Path | None = None,
+    max_files: int = 5,
+) -> Path | None:
+    """Find the most recently-modified Claude Code session JSONL that names a bead.
+
+    Looks under `~/.claude/projects/<project-key>/` (computed from `rig_root`)
+    for `*.jsonl`, sorted by mtime descending. Returns the first one that
+    mentions `bead_id` in its content. Caps the scan at `max_files` to keep
+    the per-bead cost bounded — chains write a session per phase, so the
+    most-recent five almost always covers the relevant worker.
+
+    Returns None if the project directory doesn't exist, no JSONLs match, or
+    none of the candidate files mention the bead.
+    """
+    home_dir = home or Path.home()
+    project_dir = home_dir / ".claude" / "projects" / _project_key(rig_root)
+    if not project_dir.is_dir():
+        return None
+    try:
+        files = sorted(
+            project_dir.glob("*.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:max_files]
+    except OSError:
+        return None
+    for f in files:
+        if _session_mentions_bead(f, bead_id):
+            return f
+    return None
+
+
+def classify_session_mode(
+    classify_bin: str,
+    session_path: Path,
+) -> tuple[str, str] | None:
+    """Run sdlc-mode-classify.sh against `session_path`.
+
+    Returns `(verdict, reason)` where verdict is one of `mode_a` /
+    `mode_b` / `uncertain` and reason is the explainer line the classifier
+    writes to stderr. Returns None on exec failure (missing binary,
+    non-zero exit) — caller falls back to "unavailable" annotation.
+    """
+    try:
+        proc = subprocess.run(
+            [classify_bin, "--session", str(session_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if proc.returncode != 0:
+        return None
+    verdict_lines = (proc.stdout or "").strip().splitlines()
+    if not verdict_lines:
+        return None
+    verdict = verdict_lines[0].strip()
+    reason = ""
+    for line in (proc.stderr or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("reason:"):
+            reason = stripped[len("reason:") :].strip()
+            break
+    return (verdict, reason)
+
+
+def _recovery_hint(verdict: str) -> str:
+    """One-line recovery guidance keyed by mode verdict."""
+    if verdict == "mode_a":
+        return (
+            "Mode A (API overload / 529 storm). Retry the session — the "
+            "wrapper may have given up. See pack #47 retry-wrapper notes."
+        )
+    if verdict == "mode_b":
+        return (
+            "Mode B (per-turn-cap exhausted). Commit worker WIP, clear "
+            "assignee, kill session, `gc supervisor reload`. See "
+            "gascity#2293 (reactive recovery in drain-ack handler)."
+        )
+    return "Uncertain — inspect the session JSONL manually."
+
+
+def augment_body_with_mode(
+    body: str,
+    *,
+    session_path: Path | None,
+    mode_info: tuple[str, str] | None,
+) -> str:
+    """Append mode-classification details to the email body.
+
+    Three states:
+    - Session located and classified → verdict, reason, recovery hint.
+    - Session located but classifier failed → note the path so operator
+      can run the classifier manually.
+    - Session not located → note that auto-classification is unavailable.
+    """
+    if mode_info is not None:
+        verdict, reason = mode_info
+        return (
+            body
+            + "\n\n"
+            + f"Mode classification: **{verdict}**\n"
+            + f"  reason: {reason}\n"
+            + f"  recovery: {_recovery_hint(verdict)}\n"
+            + f"  session: `{session_path}`\n"
+        )
+    if session_path is not None:
+        return (
+            body
+            + "\n\n"
+            + "Mode classification: classifier failed; run manually:\n"
+            + f"  sdlc-mode-classify.sh --session {session_path}\n"
+        )
+    return (
+        body
+        + "\n\n"
+        + "Mode classification: unavailable (no recent session JSONL "
+        + "mentions this bead under ~/.claude/projects/<project-key>/)\n"
+    )
+
+
 def invoke_notify(notify_bin: str, subject: str, body: str) -> int:
     """Send the alert via sdlc-notify.sh, returning the helper's exit code.
 
@@ -312,6 +465,19 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("GC_RIG", "unknown"),
         help="rig name for the subject line (default: $GC_RIG or 'unknown')",
     )
+    default_classify = str(Path(__file__).resolve().parent / "sdlc-mode-classify.sh")
+    parser.add_argument(
+        "--classify-bin",
+        type=str,
+        default=os.environ.get("SDLC_MODE_CLASSIFY_BIN", default_classify),
+        help="path to sdlc-mode-classify.sh (default: sibling script or $SDLC_MODE_CLASSIFY_BIN)",
+    )
+    parser.add_argument(
+        "--rig-root",
+        type=str,
+        default=os.environ.get("GC_RIG_ROOT", os.getcwd()),
+        help="rig root path for project-key lookup (default: $GC_RIG_ROOT or cwd)",
+    )
     args = parser.parse_args(argv)
 
     now = parse_iso(args.now) if args.now else datetime.now(UTC)
@@ -327,9 +493,17 @@ def main(argv: list[str] | None = None) -> int:
     if not alerts:
         return 0
 
+    rig_root = Path(args.rig_root)
     for alert in alerts:
         subject, body = render_email_body(alert)
-        if invoke_notify(args.notify_bin, subject, body) == 0:
+        session_path = find_session_jsonl(alert.bead_id, rig_root)
+        mode_info = (
+            classify_session_mode(args.classify_bin, session_path)
+            if session_path is not None
+            else None
+        )
+        augmented = augment_body_with_mode(body, session_path=session_path, mode_info=mode_info)
+        if invoke_notify(args.notify_bin, subject, augmented) == 0:
             mark_alerted(alert.bead_id, alert.phase, now)
     return 0
 

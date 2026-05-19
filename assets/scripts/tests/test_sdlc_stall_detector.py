@@ -233,5 +233,160 @@ class EmailRenderTests(unittest.TestCase):
         )
 
 
+class ProjectKeyTests(unittest.TestCase):
+    """The Claude Code project-key normalization must match snapshot_operator_memory."""
+
+    def test_normalizes_slashes_dots_and_underscores(self) -> None:
+        key = stalls._project_key(Path("/home/user/coding/elder_trading_system"))
+        self.assertEqual(key, "-home-user-coding-elder-trading-system")
+
+    def test_handles_paths_with_dots(self) -> None:
+        key = stalls._project_key(Path("/srv/app.v2/rig_one"))
+        self.assertEqual(key, "-srv-app-v2-rig-one")
+
+
+class FindSessionJsonlTests(unittest.TestCase):
+    def _make_home(self, tmp: Path, rig_path: Path) -> Path:
+        """Build a fake ~/.claude/projects/<project-key>/ under tmp."""
+        project_key = stalls._project_key(rig_path)
+        d = tmp / ".claude" / "projects" / project_key
+        d.mkdir(parents=True)
+        return d
+
+    def test_returns_path_when_bead_id_in_session(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rig = tmp_path / "rig"
+            rig.mkdir()
+            project_dir = self._make_home(tmp_path, rig)
+            jsonl = project_dir / "session-1.jsonl"
+            jsonl.write_text('{"type":"text","text":"working on bd-42"}\n')
+            found = stalls.find_session_jsonl("bd-42", rig, home=tmp_path)
+            self.assertEqual(found, jsonl)
+
+    def test_returns_none_when_no_session_mentions_bead(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rig = tmp_path / "rig"
+            rig.mkdir()
+            project_dir = self._make_home(tmp_path, rig)
+            (project_dir / "session-1.jsonl").write_text("unrelated content\n")
+            self.assertIsNone(stalls.find_session_jsonl("bd-42", rig, home=tmp_path))
+
+    def test_returns_none_when_project_dir_missing(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rig = tmp_path / "rig"
+            rig.mkdir()
+            self.assertIsNone(stalls.find_session_jsonl("bd-42", rig, home=tmp_path))
+
+    def test_picks_most_recent_among_multiple(self) -> None:
+        import os
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rig = tmp_path / "rig"
+            rig.mkdir()
+            project_dir = self._make_home(tmp_path, rig)
+            old = project_dir / "old.jsonl"
+            new = project_dir / "new.jsonl"
+            old.write_text('{"text":"bd-42"}\n')
+            new.write_text('{"text":"bd-42"}\n')
+            os.utime(old, (1000, 1000))
+            os.utime(new, (2000, 2000))
+            self.assertEqual(stalls.find_session_jsonl("bd-42", rig, home=tmp_path), new)
+
+
+class ClassifySessionModeTests(unittest.TestCase):
+    """classify_session_mode is a subprocess wrapper; tests use a stub script."""
+
+    def _make_stub(self, tmp: Path, stdout: str, stderr: str, exit_code: int) -> Path:
+        """Write a bash stub that echoes canned stdout/stderr and exits with code."""
+        stub = tmp / "fake-classify.sh"
+        stub.write_text(f"#!/bin/bash\necho {stdout!r}\n>&2 echo {stderr!r}\nexit {exit_code}\n")
+        stub.chmod(0o755)
+        return stub
+
+    def test_returns_verdict_and_reason(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            stub = self._make_stub(tmp_path, "mode_a", "  reason: 3 hits", 0)
+            session = tmp_path / "s.jsonl"
+            session.write_text("x")
+            out = stalls.classify_session_mode(str(stub), session)
+            self.assertEqual(out, ("mode_a", "3 hits"))
+
+    def test_returns_none_on_nonzero_exit(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            stub = self._make_stub(tmp_path, "", "boom", 2)
+            session = tmp_path / "s.jsonl"
+            session.write_text("x")
+            self.assertIsNone(stalls.classify_session_mode(str(stub), session))
+
+    def test_returns_none_on_missing_binary(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            session = tmp_path / "s.jsonl"
+            session.write_text("x")
+            self.assertIsNone(stalls.classify_session_mode("/no/such/binary", session))
+
+
+class AugmentBodyTests(unittest.TestCase):
+    def test_full_classification_attached(self) -> None:
+        out = stalls.augment_body_with_mode(
+            "BASE",
+            session_path=Path("/x/y.jsonl"),
+            mode_info=("mode_a", "3 Mode-A signatures"),
+        )
+        self.assertIn("Mode classification: **mode_a**", out)
+        self.assertIn("3 Mode-A signatures", out)
+        self.assertIn("pack #47", out)
+        self.assertIn("/x/y.jsonl", out)
+
+    def test_mode_b_hint(self) -> None:
+        out = stalls.augment_body_with_mode(
+            "BASE",
+            session_path=Path("/x/y.jsonl"),
+            mode_info=("mode_b", "1 turn-cap hit"),
+        )
+        self.assertIn("Mode classification: **mode_b**", out)
+        self.assertIn("gascity#2293", out)
+
+    def test_session_only_falls_back_to_manual_command(self) -> None:
+        out = stalls.augment_body_with_mode("BASE", session_path=Path("/x/y.jsonl"), mode_info=None)
+        self.assertIn("classifier failed", out)
+        self.assertIn("sdlc-mode-classify.sh --session /x/y.jsonl", out)
+
+    def test_no_session_notes_unavailable(self) -> None:
+        out = stalls.augment_body_with_mode("BASE", session_path=None, mode_info=None)
+        self.assertIn("unavailable", out)
+        self.assertIn("no recent session JSONL", out)
+
+
+class RecoveryHintTests(unittest.TestCase):
+    def test_mode_a_mentions_retry(self) -> None:
+        self.assertIn("Retry", stalls._recovery_hint("mode_a"))
+
+    def test_mode_b_mentions_supervisor_reload(self) -> None:
+        self.assertIn("supervisor reload", stalls._recovery_hint("mode_b"))
+
+    def test_uncertain_says_manual_inspection(self) -> None:
+        self.assertIn("manually", stalls._recovery_hint("uncertain"))
+
+
 if __name__ == "__main__":
     unittest.main()
