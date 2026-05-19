@@ -160,13 +160,49 @@ class SlugFromSummaryTests(unittest.TestCase):
             "docstring-drift-in-coordinator",
         )
 
-    def test_strips_punctuation(self) -> None:
+    def test_underscores_treated_as_word_breaks(self) -> None:
         self.assertEqual(
-            autofix.slug_from_summary("Fix: foo.bar() — doesn't match!"),
-            "fix-foobar-doesnt-match",
+            autofix.slug_from_summary("_stdin_prompt parses int"),
+            "stdin-prompt-parses-int",
         )
 
-    def test_truncates_to_max(self) -> None:
+    def test_dots_treated_as_word_breaks(self) -> None:
+        # `foo.bar()` should become `foo-bar`, not `foobar`.
+        self.assertEqual(
+            autofix.slug_from_summary("Fix foo.bar handling"),
+            "fix-foo-bar-handling",
+        )
+
+    def test_strips_other_punctuation(self) -> None:
+        self.assertEqual(
+            autofix.slug_from_summary("Fix: foo!() — doesn't match"),
+            "fix-foo-doesn-t-match",
+        )
+
+    def test_parens_become_word_breaks(self) -> None:
+        # `int(raw_choice)` → `int raw choice`, not `intrawchoice`.
+        self.assertEqual(
+            autofix.slug_from_summary("Parses int(raw_choice) without bounds"),
+            "parses-int-raw-choice-without-bounds",
+        )
+
+    def test_truncates_at_word_boundary(self) -> None:
+        # "consume validated llmdiaryresponse instead of model dump" with
+        # max_chars=40 should truncate to the last dash, not mid-word.
+        out = autofix.slug_from_summary(
+            "Consume validated LLMDiaryResponse instead of model_dump",
+            max_chars=40,
+        )
+        self.assertLessEqual(len(out), 40)
+        self.assertFalse(
+            out.endswith("-"),
+            f"slug should not end with dangling dash: {out!r}",
+        )
+        # The truncation should land on a word boundary; the last token
+        # should not be a partial English word like "mod" (cut off "model_dump").
+        self.assertNotIn("instea", out, "should not split mid-word")
+
+    def test_truncates_hard_when_no_dash(self) -> None:
         out = autofix.slug_from_summary("a" * 200, max_chars=10)
         self.assertEqual(out, "a" * 10)
 

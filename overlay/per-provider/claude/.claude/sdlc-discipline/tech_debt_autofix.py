@@ -89,11 +89,32 @@ def parse_issue_body(body: str) -> dict[str, str] | None:
 
 
 def slug_from_summary(summary: str, max_chars: int = 60) -> str:
-    """Kebab-case slug suitable for `stories/EL-NNN-<slug>.md`."""
-    cleaned = re.sub(r"[^a-zA-Z0-9\s-]", "", summary).strip().lower()
-    cleaned = re.sub(r"\s+", "-", cleaned)
+    """Kebab-case slug suitable for `stories/EL-NNN-<slug>.md`.
+
+    Treats `_`, `.`, and other word-internal punctuation as word
+    separators so identifiers like `_stdin_prompt` and `LLMDiaryResponse`
+    survive as `stdin-prompt` and `llmdiaryresponse` rather than being
+    smashed into single tokens. Truncates at the last `-` before
+    `max_chars` so the slug doesn't end mid-word.
+    """
+    # Convert every non-alnum, non-dash char to a space so identifier
+    # punctuation (`_`, `.`, parens, commas) becomes a word break rather
+    # than getting silently smashed out. Then collapse whitespace into
+    # single dashes.
+    intermediate = re.sub(r"[^a-zA-Z0-9-]+", " ", summary).strip().lower()
+    cleaned = re.sub(r"\s+", "-", intermediate)
     cleaned = re.sub(r"-+", "-", cleaned)
-    return cleaned[:max_chars].rstrip("-") or "tech-debt"
+    if not cleaned:
+        return "tech-debt"
+    if len(cleaned) <= max_chars:
+        return cleaned.rstrip("-")
+    # Truncate at the last dash within the limit; if no dash is found
+    # within max_chars, fall back to a hard cut.
+    cut = cleaned[:max_chars]
+    last_dash = cut.rfind("-")
+    if last_dash > max_chars // 2:
+        return cut[:last_dash]
+    return cut.rstrip("-") or "tech-debt"
 
 
 def strip_title_prefix(title: str) -> str:
