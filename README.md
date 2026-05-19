@@ -2,6 +2,31 @@
 
 A Gas City pack that runs an SDLC chain — plan, build, test, review, document, finalize — against any rig with a Click/pytest/Python project shape. Five pool agents, zero named sessions, parallel-by-default. Concurrency is bounded by host CPU/RAM and per-account API rate limits, not by named-session serialization.
 
+## Contents
+
+- [Purpose](#purpose)
+- [Architecture (v2.0)](#architecture-v20)
+- [Authoring stories](#authoring-stories)
+- [What's in this pack](#whats-in-this-pack)
+- [Prerequisites and installation](#prerequisites-and-installation)
+- [How rules reach the agent](#how-rules-reach-the-agent)
+- [Principal-engineer guides (v2.5)](#principal-engineer-guides-v25)
+- [Story-graph bridge (v2.6)](#story-graph-bridge-v26)
+- [Differential gates (v2.4)](#differential-gates-v24)
+- [Three operating modes](#three-operating-modes)
+- [Per-story overrides](#per-story-overrides)
+- [The glance rubric](#the-glance-rubric)
+- [Architectural signals (v2.10.0)](#architectural-signals-v2100)
+- [Tech-debt automation (v2.11)](#tech-debt-automation-v211)
+- [Operator notification (v2.12)](#operator-notification-v212)
+- [Claude retry wrapper (v2.12)](#claude-retry-wrapper-v212)
+- [Supervisor startup wrapper (v2.18.0)](#supervisor-startup-wrapper-v2180)
+- [Cost tracking](#cost-tracking)
+- [Running the chain](#running-the-chain)
+- [Watching the chain](#watching-the-chain)
+- [Project assumptions](#project-assumptions)
+- [Versioning](#versioning) (incl. [version history](#version-history))
+
 ## Purpose
 
 LLM-based coding agents can write working code. They cannot, on their own, write *consistent* code at codebase scale — model outputs drift across independent generations even when prompts and seeds are held constant. A codebase built by many parallel agents under no external constraint looks like ten different developers wrote it: refactors stop composing, onboarding the next agent (or human) gets harder, and the trust required to ship gets absorbed back into per-change human review.
@@ -263,6 +288,8 @@ gc start
 ```
 
 Brings the city up under the machine-wide supervisor. After this point, beads routed to a pool's template name will spawn fresh sessions on demand and de-scale on idle.
+
+For *ongoing* supervisor restarts (after pulling pack updates, rebuilding `gc`, recovering from a crash, or as part of release deployment), prefer the pack-shipped wrapper script over a bare `gc supervisor start`. See [Supervisor startup wrapper (v2.18.0)](#supervisor-startup-wrapper-v2180). The wrapper resolves PATH consistently across interactive shells, non-interactive ssh invocations, and (future) systemd-managed deployments.
 
 ## How rules reach the agent
 
@@ -530,6 +557,54 @@ The wrapper auto-resolves two pack-side env vars so the rig's `city.toml` doesn'
 | `crash` | 60, 60, 60, 60, 60 | Process died abnormally; system room |
 | `unknown` | 60, 60, 60, 60, 60 | Conservative default |
 
+## Supervisor startup wrapper (v2.18.0)
+
+`assets/scripts/sdlc-supervisor-start.sh` is the pack-shipped wrapper around `gc supervisor start`. It sources `~/.profile` to inherit the operator's interactive-shell PATH before exec'ing the supervisor, then prepends `~/.local/bin` as belt-and-suspenders so user-installed binaries (`uv`, `bd`, `gh`, and anything else under `~/.local/bin`) are visible to the supervisor and every chain phase it spawns.
+
+### Why it exists
+
+By default, a non-interactive process spawn — a script, a systemd unit, anything invoked outside an interactive shell — inherits a minimal PATH that omits `~/.local/bin`. The supervisor inherits this minimal PATH, every pool agent inherits it from the supervisor, and every chain phase the pool agents spawn inherits it from them. When a phase script reaches for `uv`, `bd`, `gh`, or any user-installed tool, the call fails with `FileNotFoundError`. The chain's signals classifier crashes silently. The reviewer's recommendation tier degrades without anyone noticing.
+
+Today this is latent on hosts where the operator starts the supervisor from an interactive shell — interactive shells inherit `~/.profile`'s PATH, so the supervisor and its children carry `~/.local/bin`. The latent bomb fires the moment the supervisor moves to a systemd-managed deployment (per the release-deployment posture in the host's future): the systemd unit inherits the system's bare PATH, and every chain phase that reaches for a user-installed binary crashes.
+
+The wrapper closes this class problem at the script layer. One PATH-resolution point covers today's operator-invoked startup AND tomorrow's systemd unit (whose `ExecStart=` points at the same script), so any host that switches lifecycle models retains identical PATH semantics.
+
+### Usage
+
+```bash
+# Verify env resolution without bouncing the supervisor:
+bash /path/to/pack/assets/scripts/sdlc-supervisor-start.sh --check
+
+# Start (or restart) the supervisor through the wrapper:
+bash /path/to/pack/assets/scripts/sdlc-supervisor-start.sh
+```
+
+In a path-imported pack, the actual location is `<city>/.gc/cache/includes/sdlc-discipline-pack-<hash>/assets/scripts/sdlc-supervisor-start.sh`. Resolve the cache directory via `gc config explain` or `ls <city>/.gc/cache/includes/`.
+
+`--check` mode prints the resolved PATH plus the resolved paths of `gc`, `uv`, `bd`, and `gh`, then exits 0 without invoking the supervisor. Use it as a pre-flight check before a real bounce.
+
+Additional flags are forwarded to `gc supervisor start`.
+
+### Configuration
+
+`SDLC_SUPERVISOR_GC` overrides the gc binary path (default: `gc`, looked up via PATH). Used by tests to substitute a stub binary; production rigs do not need to set it.
+
+### When to use the wrapper vs `gc start`
+
+| Operation | Use |
+| --- | --- |
+| First-time city setup (install + register) | `gc start` (per [Step 7](#7-start-the-supervisor-first-time)) |
+| Restart after a pack upgrade, `gc` rebuild, or supervisor crash | `bash sdlc-supervisor-start.sh` |
+| Restart after pulling pack updates that ship new agent configs | `bash sdlc-supervisor-start.sh` |
+| Restart from a non-login context (cron, systemd unit, ssh script) | `bash sdlc-supervisor-start.sh` (load-bearing) |
+| Verify the supervisor's PATH would be correct without bouncing | `bash sdlc-supervisor-start.sh --check` |
+
+The first-time `gc start` is acceptable from an interactive shell because the interactive shell already carries `~/.profile`'s PATH. The wrapper becomes load-bearing for any restart context that isn't guaranteed to have it.
+
+### Stopping the supervisor
+
+The wrapper covers only `start`. Use `gc supervisor stop` directly to stop. The stop path doesn't need PATH-fix discipline — `gc` is on PATH because the operator just typed it from a login shell.
+
 ## Cost tracking
 
 Each pool agent records `<phase>.session_id` and `<phase>.started_at` at start, `<phase>.completed_at` at end, on the story bead's metadata. The `sdlc-cost-rollup` order watches for `bead.closed` events and appends a row to `<city>/cost_history.csv`:
@@ -607,6 +682,7 @@ Schema 2. Pack version follows semver:
 
 Entries list the headline change for each tagged release, newest first.
 
+- **v2.18.1** — docs patch. README gains a top-of-document Contents (TOC) covering every `##` section (the README crossed 700 lines with v2.18.0 — a TOC was overdue), and a new "Supervisor startup wrapper (v2.18.0)" section documents the `sdlc-supervisor-start.sh` invocation pattern that v2.18.0 introduced. Step 7 of installation now points at the wrapper for *ongoing* supervisor restarts (vs the one-time `gc start` first-time city bringup). A "when to use the wrapper vs `gc start`" table makes the boundary explicit. No code changes.
 - **v2.18.0** — one commit accumulated on `main` since v2.17.1. Tagged 2026-05-18. Scope unit: close pack #81's class problem at the script layer. `assets/scripts/sdlc-supervisor-start.sh` is a pack-shipped wrapper that the operator runs instead of `gc supervisor start`. The wrapper sources `~/.profile` so the supervisor inherits the operator's interactive-shell PATH (where `uv`, `bd`, `gh` and other user-installed binaries live under `~/.local/bin`), prepends `~/.local/bin` as belt-and-suspenders for hosts whose .profile doesn't add it, then `exec`s gc. One PATH-resolution point works identically for today's operator-invoked startup and tomorrow's systemd-managed deployment (per EL-100 / future release-deployment work) — the systemd unit's `ExecStart=` will point at this same script. The bomb pack #81 surfaced was that any non-interactive supervisor invocation would inherit a bare PATH and crash `signal_d_layer_crossing()` with FileNotFoundError on `uv`; the wrapper closes the bomb for all current and future binaries the pack reaches for, not just `uv`. `--check` mode prints resolved PATH plus tool paths without invoking gc, so operators verify env resolution before bouncing the supervisor. Eleven unittest cases drive the script via subprocess against synthetic HOMEs and stub gc binaries covering --check, .profile sourcing, ~/.local/bin belt-and-suspenders, gc-not-found error path, and exec handoff. Full pack suite 248 tests.
 - **v2.17.1** — patch. `tech_debt_autofix.slug_from_summary` was stripping identifier punctuation (`_`, `.`, parens, commas) instead of treating it as word breaks, so `_stdin_prompt parses int(raw_choice)` became slug `stdinprompt-parses-intrawchoice` and truncation could land mid-word at `instead-of-model` (cutting off `model_dump`). Surfaced 2026-05-18 evening during sub-C dry-run smoke against open Elder tech-debt issues #287 and #246. Fix replaces every non-alnum non-dash char with a single space (uniform word-break treatment), then truncates at the last `-` within the limit when one exists in the back half of the slug. Three new unittest cases (underscore breaks, dot breaks, parens breaks); one existing case rewritten for the new uniform rule. Full autofix suite 33 tests pass.
 - **v2.17.0** — two commits accumulated on `main` since v2.16.0. Tagged 2026-05-18. Scope unit: harden chain-recovery — operator gets richer alerts when a stall fires (Mode A/B verdict attached to the email) and a mechanical tool for the manual checkpoint commit (no more accidental `.claude/settings.json` reshapes riding through to PR review). Together these close the disambiguation half of Brooklyn-autonomy gap #3 (recovery-escalation) and the load-bearing failure mode in pack #79.
