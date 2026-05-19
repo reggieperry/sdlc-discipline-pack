@@ -55,7 +55,30 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+# Sibling-import the classifier. The script is invoked directly via
+# `python3 tech_debt.py file ...`, so the sibling lives in the same
+# directory. Inject the script's parent into sys.path before the import
+# so it resolves regardless of cwd.
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+from tech_debt_classifier import Verdict, classify_by_rules  # noqa: E402
+
 SEVERITY_VALUES = frozenset({"low", "med", "high"})
+
+# Trailer uses `med`; the classifier's rules use `medium`. Normalize at the
+# boundary so the classifier's contract stays canonical and the trailer's
+# wire format stays backward-compatible.
+_SEVERITY_TO_CLASSIFIER = {"low": "low", "med": "medium", "high": "high"}
+
+# Verdict → GitHub label string. The base `tech-debt` label is applied
+# regardless; the verdict label is the routing signal a downstream auto-fix
+# orchestrator (sub-stories B + C of pack #32) reads to pick eligible items.
+_VERDICT_LABELS = {
+    Verdict.AUTOFIX_SAFE: "tech-debt:autofix-safe",
+    Verdict.NEEDS_HUMAN: "tech-debt:needs-human",
+    Verdict.DEFER_TO_LLM: "tech-debt:defer-to-llm",
+}
 REQUIRED_FIELDS = (
     "target_path",
     "target_lines",
@@ -112,14 +135,12 @@ def validate_item(item: Any) -> str | None:
     return None
 
 
-def is_enabled(rig_root: Path) -> bool:
-    """Return True if the rig has opted in via architecture.toml.
+def _load_architecture(rig_root: Path) -> dict[str, Any] | None:
+    """Load architecture.toml from the rig's `.claude/rules/project/` directory.
 
-    Search order matches the pack convention: `.claude/rules/project/`
-    (where `sensitive_files`, `domain_model_files`, and `protocol_modules`
-    live) takes precedence over a top-level `architecture.toml`. The
-    top-level path is retained as a fallback for rigs that haven't
-    adopted the `.claude/rules/project/` layout.
+    Falls back to a top-level `architecture.toml` for rigs that haven't
+    adopted the `.claude/rules/project/` layout. Returns the parsed dict
+    or None if no config exists / can't be read.
     """
     candidates = (
         rig_root / ".claude" / "rules" / "project" / "architecture.toml",
@@ -127,17 +148,42 @@ def is_enabled(rig_root: Path) -> bool:
     )
     config_path = next((p for p in candidates if p.exists()), None)
     if config_path is None:
-        return False
+        return None
     try:
         with config_path.open("rb") as fh:
-            data = tomllib.load(fh)
+            return tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         print(f"[tech-debt] failed to read {config_path}: {exc}", file=sys.stderr)
+        return None
+
+
+def is_enabled(rig_root: Path) -> bool:
+    """Return True if the rig has opted in via architecture.toml."""
+    data = _load_architecture(rig_root)
+    if data is None:
         return False
     section = data.get("tech_debt_automation", {})
     if not isinstance(section, dict):
         return False
     return bool(section.get("enabled", False))
+
+
+def read_sensitive_files(rig_root: Path) -> list[str]:
+    """Return the rig's sensitive-files allowlist from architecture.toml.
+
+    Falls back to an empty list if the config or array is missing. The
+    classifier treats an empty list as "no path matches sensitive" — a
+    permissive default that lets the OTHER classifier rules (severity,
+    line span, category set) carry the safety. Rigs that want strict
+    sensitive-touch=0 behavior should populate the array.
+    """
+    data = _load_architecture(rig_root)
+    if data is None:
+        return []
+    raw = data.get("sensitive_files", [])
+    if not isinstance(raw, list):
+        return []
+    return [str(p) for p in raw if isinstance(p, str)]
 
 
 def build_issue_body(item: dict[str, Any], pr_url: str, review_path_rel: str) -> str:
@@ -165,49 +211,63 @@ def build_issue_body(item: dict[str, Any], pr_url: str, review_path_rel: str) ->
     )
 
 
+_REQUIRED_LABELS: tuple[tuple[str, str, str], ...] = (
+    ("tech-debt", "fbca04", "Reviewer-flagged tech debt (filed by SDLC pack automation)"),
+    ("tech-debt:autofix-safe", "0e8a16", "Tech-debt safe for downstream auto-fix orchestration"),
+    ("tech-debt:needs-human", "d93f0b", "Tech-debt that requires human triage"),
+    (
+        "tech-debt:defer-to-llm",
+        "5319e7",
+        "Tech-debt with ambiguous category; LLM fallback classification queued",
+    ),
+)
+
+
 def ensure_label(gh_runner: Any = None) -> bool:
-    """Ensure the `tech-debt` label exists in the rig's GitHub repo.
+    """Ensure the `tech-debt` base label + the three verdict labels exist.
 
-    `gh issue create --label tech-debt` fails on a repo where the label
-    has not been pre-created, with `could not add label: 'tech-debt' not
-    found`. This idempotent provisioner runs before any create call: it
-    checks for the label, creates it with a neutral color if absent, and
-    treats a race-condition "already exists" failure as success.
+    `gh issue create --label X` fails on an unprovisioned label. This
+    provisioner runs idempotently before any create call: it lists every
+    label in the repo once (avoiding `--search`'s punctuation/operator
+    edge cases per the v2.12.1 fix in `issue_exists`), filters in Python,
+    and creates only the missing labels.
 
-    Returns True on success or already-exists; False on a hard failure
-    (network down, no auth). Callers should not proceed with create
+    The four labels are: the base `tech-debt` plus
+    `tech-debt:autofix-safe` / `tech-debt:needs-human` /
+    `tech-debt:defer-to-llm`. Verdict labels are the routing signal a
+    downstream auto-fix orchestrator (pack #32 sub-stories B + C, not yet
+    built) reads to pick eligible items.
+
+    Returns True if all four are present or successfully created; False on
+    a hard failure of any one. Callers should not proceed with create
     operations if this returns False.
     """
     runner = gh_runner or _run_gh
-    listing = runner(["label", "list", "--search", "tech-debt", "--json", "name"])
+    listing = runner(["label", "list", "--json", "name", "--limit", "200"])
+    existing: set[str] = set()
     if listing.returncode == 0:
         try:
-            labels = json.loads(listing.stdout or "[]")
-        except json.JSONDecodeError:
-            labels = []
-        if any(item.get("name") == "tech-debt" for item in labels):
-            return True
-    # Label not present (or list failed); attempt create. The create call
-    # is the source of truth — if it succeeds or returns "already exists",
-    # we proceed.
-    created = runner(
-        [
-            "label",
-            "create",
-            "tech-debt",
-            "--color",
-            "fbca04",
-            "--description",
-            "Reviewer-flagged tech debt (filed by SDLC pack automation)",
-        ],
-    )
-    if created.returncode == 0:
-        return True
-    # gh returns non-zero for "already exists" — treat that as success.
-    if "already exists" in created.stderr.lower():
-        return True
-    print(f"[tech-debt] label create failed: {created.stderr.strip()}", file=sys.stderr)
-    return False
+            existing = {
+                item["name"]
+                for item in json.loads(listing.stdout or "[]")
+                if isinstance(item, dict) and "name" in item
+            }
+        except (json.JSONDecodeError, TypeError):
+            existing = set()
+
+    for name, color, description in _REQUIRED_LABELS:
+        if name in existing:
+            continue
+        created = runner(
+            ["label", "create", name, "--color", color, "--description", description],
+        )
+        if created.returncode != 0 and "already exists" not in created.stderr.lower():
+            print(
+                f"[tech-debt] label create failed for {name!r}: {created.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return False
+    return True
 
 
 def issue_exists(title: str, gh_runner: Any = None) -> bool:
@@ -248,12 +308,35 @@ def issue_exists(title: str, gh_runner: Any = None) -> bool:
     return any(i.get("title") == title for i in existing)
 
 
-def create_issue(title: str, body: str, gh_runner: Any = None) -> str | None:
-    """Run `gh issue create`. Return the new issue URL on success, None on failure."""
+def classify_item(item: dict[str, Any], sensitive_files: list[str]) -> Verdict:
+    """Classify one trailer item, normalizing the severity at the boundary.
+
+    The trailer's wire format uses `low/med/high`; the classifier's rules
+    use `low/medium`. We translate at the call site so the classifier's
+    canonical contract is unchanged.
+    """
+    normalized = dict(item)
+    normalized["severity"] = _SEVERITY_TO_CLASSIFIER.get(item.get("severity", ""), "")
+    return classify_by_rules(normalized, sensitive_files)
+
+
+def create_issue(
+    title: str,
+    body: str,
+    verdict: Verdict | None = None,
+    gh_runner: Any = None,
+) -> str | None:
+    """Run `gh issue create`. Return the new issue URL on success, None on failure.
+
+    Applies the base `tech-debt` label plus, when `verdict` is supplied,
+    the corresponding `tech-debt:<verdict>` routing label. Both labels
+    must be provisioned (via `ensure_label`) before this call.
+    """
     runner = gh_runner or _run_gh
-    result = runner(
-        ["issue", "create", "--title", title, "--label", "tech-debt", "--body", body],
-    )
+    cmd = ["issue", "create", "--title", title, "--label", "tech-debt", "--body", body]
+    if verdict is not None:
+        cmd.extend(["--label", _VERDICT_LABELS[verdict]])
+    result = runner(cmd)
     if result.returncode != 0:
         print(f"[tech-debt] gh issue create failed: {result.stderr.strip()}", file=sys.stderr)
         return None
@@ -283,15 +366,22 @@ def file_command(args: argparse.Namespace, gh_runner: Any = None) -> int:
     except ValueError:
         review_rel = str(review_path)
 
-    # Provision the `tech-debt` label before any create call. gh issue
-    # create fails on an unprovisioned label; provisioning is idempotent.
+    # Provision the `tech-debt` base label + the three verdict routing
+    # labels before any create call. gh issue create fails on an
+    # unprovisioned label; provisioning is idempotent.
     if not ensure_label(gh_runner=gh_runner):
         print("[tech-debt] label provisioning failed; aborting", file=sys.stderr)
         return 0
 
+    # Read the rig's sensitive-files allowlist once. The classifier needs
+    # it per-item; reading the TOML once and passing the list keeps the
+    # hot path zero-syscall.
+    sensitive_files = read_sensitive_files(rig_root)
+
     filed = 0
     skipped_dup = 0
     skipped_invalid = 0
+    by_verdict: dict[Verdict, int] = dict.fromkeys(Verdict, 0)
     for item in items:
         reason = validate_item(item)
         if reason is not None:
@@ -303,13 +393,19 @@ def file_command(args: argparse.Namespace, gh_runner: Any = None) -> int:
             print(f"[tech-debt] dup: {title}")
             skipped_dup += 1
             continue
+        verdict = classify_item(item, sensitive_files)
         body = build_issue_body(item, pr_url, review_rel)
-        url = create_issue(title, body, gh_runner=gh_runner)
+        url = create_issue(title, body, verdict=verdict, gh_runner=gh_runner)
         if url:
-            print(f"[tech-debt] filed: {url}")
+            print(f"[tech-debt] filed [{verdict.value}]: {url}")
             filed += 1
+            by_verdict[verdict] += 1
 
-    print(f"[tech-debt] summary: {filed} filed, {skipped_dup} dup, {skipped_invalid} invalid")
+    verdict_summary = ", ".join(f"{v.value}={by_verdict[v]}" for v in Verdict)
+    print(
+        f"[tech-debt] summary: {filed} filed ({verdict_summary}), "
+        f"{skipped_dup} dup, {skipped_invalid} invalid"
+    )
     return 0
 
 

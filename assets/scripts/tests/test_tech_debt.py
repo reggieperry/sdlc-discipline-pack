@@ -190,19 +190,73 @@ class FeatureGateTests(unittest.TestCase):
                 self.assertFalse(tech_debt.is_enabled(Path(tmp)))
 
 
+_ALL_LABELS_PRESENT = json.dumps(
+    [
+        {"name": "tech-debt"},
+        {"name": "tech-debt:autofix-safe"},
+        {"name": "tech-debt:needs-human"},
+        {"name": "tech-debt:defer-to-llm"},
+    ]
+)
+
+
 class EnsureLabelTests(unittest.TestCase):
-    def test_label_already_present_no_create(self) -> None:
-        gh = _fake_gh_factory([_ok(json.dumps([{"name": "tech-debt"}]))])
+    def test_all_labels_already_present_no_creates(self) -> None:
+        """One list call returns all four labels; no create calls fire.
+
+        v2.15.0 changed `ensure_label` from per-label `--search` to one
+        unfiltered list + Python set-membership (matches `issue_exists`'s
+        v2.12.1 pattern), so the four-label suite costs 1 gh call when
+        already provisioned.
+        """
+        gh = _fake_gh_factory([_ok(_ALL_LABELS_PRESENT)])
         self.assertTrue(tech_debt.ensure_label(gh_runner=gh))
-        # Only the list call; no create.
         self.assertEqual(len(gh.calls), 1)
         self.assertEqual(gh.calls[0][:2], ["label", "list"])
+        # The list call must not pass --search (v2.12.1 contract).
+        self.assertNotIn("--search", gh.calls[0])
 
-    def test_label_absent_creates_successfully(self) -> None:
-        gh = _fake_gh_factory([_ok("[]"), _ok("https://github.com/owner/repo/labels/tech-debt\n")])
+    def test_all_labels_absent_creates_each(self) -> None:
+        """Empty list → four create calls, one per label."""
+        gh = _fake_gh_factory(
+            [
+                _ok("[]"),
+                _ok("https://github.com/owner/repo/labels/tech-debt\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:autofix-safe\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:needs-human\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:defer-to-llm\n"),
+            ]
+        )
         self.assertTrue(tech_debt.ensure_label(gh_runner=gh))
-        self.assertEqual(len(gh.calls), 2)
-        self.assertEqual(gh.calls[1][:3], ["label", "create", "tech-debt"])
+        self.assertEqual(len(gh.calls), 5)
+        created_names = [c[2] for c in gh.calls[1:]]
+        self.assertEqual(
+            created_names,
+            [
+                "tech-debt",
+                "tech-debt:autofix-safe",
+                "tech-debt:needs-human",
+                "tech-debt:defer-to-llm",
+            ],
+        )
+
+    def test_base_present_verdict_labels_absent(self) -> None:
+        """Mixed: base label present, three verdict labels missing → 3 creates."""
+        gh = _fake_gh_factory(
+            [
+                _ok(json.dumps([{"name": "tech-debt"}])),
+                _ok("https://github.com/owner/repo/labels/tech-debt:autofix-safe\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:needs-human\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:defer-to-llm\n"),
+            ]
+        )
+        self.assertTrue(tech_debt.ensure_label(gh_runner=gh))
+        self.assertEqual(len(gh.calls), 4)
+        created_names = [c[2] for c in gh.calls[1:]]
+        self.assertEqual(
+            created_names,
+            ["tech-debt:autofix-safe", "tech-debt:needs-human", "tech-debt:defer-to-llm"],
+        )
 
     def test_label_create_already_exists_treated_as_success(self) -> None:
         already = subprocess.CompletedProcess(
@@ -211,20 +265,40 @@ class EnsureLabelTests(unittest.TestCase):
             stdout="",
             stderr="label 'tech-debt' already exists\n",
         )
-        gh = _fake_gh_factory([_ok("[]"), already])
+        gh = _fake_gh_factory(
+            [
+                _ok("[]"),
+                already,  # tech-debt create returns already-exists; treated as success
+                _ok("https://github.com/owner/repo/labels/tech-debt:autofix-safe\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:needs-human\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:defer-to-llm\n"),
+            ]
+        )
         self.assertTrue(tech_debt.ensure_label(gh_runner=gh))
 
-    def test_label_create_hard_failure_returns_false(self) -> None:
+    def test_first_label_create_hard_failure_returns_false(self) -> None:
+        """First label hard-fails → ensure_label returns False after 2 calls.
+
+        Fast-fail short-circuits subsequent verdict-label provisioning.
+        """
         gh = _fake_gh_factory([_ok("[]"), _err("network down")])
         with redirect_stderr(io.StringIO()):
             self.assertFalse(tech_debt.ensure_label(gh_runner=gh))
+        self.assertEqual(len(gh.calls), 2)
 
-    def test_label_list_failure_falls_through_to_create(self) -> None:
-        # If list fails, we still attempt create; create succeeds.
+    def test_label_list_failure_falls_through_to_creates(self) -> None:
+        """list fails → all four labels attempt create."""
         gh = _fake_gh_factory(
-            [_err("temporary"), _ok("https://github.com/owner/repo/labels/tech-debt\n")]
+            [
+                _err("temporary"),
+                _ok("https://github.com/owner/repo/labels/tech-debt\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:autofix-safe\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:needs-human\n"),
+                _ok("https://github.com/owner/repo/labels/tech-debt:defer-to-llm\n"),
+            ]
         )
         self.assertTrue(tech_debt.ensure_label(gh_runner=gh))
+        self.assertEqual(len(gh.calls), 5)
 
 
 class IssueExistsTests(unittest.TestCase):
@@ -306,6 +380,82 @@ class CreateIssueTests(unittest.TestCase):
         self.assertIsNone(tech_debt.create_issue("[tech-debt] Foo", "body", gh_runner=gh))
 
 
+class ClassifyItemTests(unittest.TestCase):
+    """Pack v2.15.0 — classify_item is the wire-format-to-classifier boundary.
+
+    The trailer JSON uses `low/med/high` severity; the underlying
+    `tech_debt_classifier.classify_by_rules` rule uses `low/medium`.
+    `classify_item` normalizes at the boundary so the classifier's
+    canonical contract stays unchanged and the trailer wire format stays
+    backward-compatible.
+    """
+
+    def test_med_severity_normalizes_to_medium(self) -> None:
+        item = dict(VALID_ITEM, target_lines="5-8", severity="med", category="docstring-vs-code")
+        verdict = tech_debt.classify_item(item, sensitive_files=[])
+        self.assertEqual(verdict, tech_debt.Verdict.AUTOFIX_SAFE)
+
+    def test_low_severity_unchanged(self) -> None:
+        item = dict(VALID_ITEM, target_lines="5-8", severity="low", category="missing-test")
+        verdict = tech_debt.classify_item(item, sensitive_files=[])
+        self.assertEqual(verdict, tech_debt.Verdict.AUTOFIX_SAFE)
+
+    def test_high_severity_blocks_autofix(self) -> None:
+        item = dict(VALID_ITEM, severity="high", category="docstring-vs-code")
+        verdict = tech_debt.classify_item(item, sensitive_files=[])
+        self.assertEqual(verdict, tech_debt.Verdict.NEEDS_HUMAN)
+
+    def test_sensitive_file_blocks_autofix(self) -> None:
+        item = dict(VALID_ITEM, target_path="core/state.py", severity="med")
+        verdict = tech_debt.classify_item(item, sensitive_files=["core/state.py"])
+        self.assertEqual(verdict, tech_debt.Verdict.NEEDS_HUMAN)
+
+    def test_sensitive_file_glob_matches(self) -> None:
+        item = dict(VALID_ITEM, target_path="agents/risk_agent.py", severity="med")
+        verdict = tech_debt.classify_item(item, sensitive_files=["agents/*.py"])
+        self.assertEqual(verdict, tech_debt.Verdict.NEEDS_HUMAN)
+
+    def test_risky_category_blocks_autofix(self) -> None:
+        item = dict(VALID_ITEM, severity="med", category="stale-state")
+        verdict = tech_debt.classify_item(item, sensitive_files=[])
+        self.assertEqual(verdict, tech_debt.Verdict.NEEDS_HUMAN)
+
+    def test_unknown_category_defers_to_llm(self) -> None:
+        item = dict(VALID_ITEM, target_lines="5-8", severity="med", category="not-a-known-category")
+        verdict = tech_debt.classify_item(item, sensitive_files=[])
+        self.assertEqual(verdict, tech_debt.Verdict.DEFER_TO_LLM)
+
+    def test_oversized_line_span_blocks_autofix(self) -> None:
+        item = dict(
+            VALID_ITEM, target_lines="100-200", severity="med", category="dead-code-removal"
+        )
+        verdict = tech_debt.classify_item(item, sensitive_files=[])
+        self.assertEqual(verdict, tech_debt.Verdict.NEEDS_HUMAN)
+
+
+class CreateIssueVerdictLabelTests(unittest.TestCase):
+    """v2.15.0 — create_issue applies the verdict label alongside `tech-debt`."""
+
+    def test_autofix_safe_applies_routing_label(self) -> None:
+        gh = _fake_gh_factory([_ok("https://github.com/owner/repo/issues/1\n")])
+        url = tech_debt.create_issue(
+            "[tech-debt] x",
+            "body",
+            verdict=tech_debt.Verdict.AUTOFIX_SAFE,
+            gh_runner=gh,
+        )
+        self.assertIsNotNone(url)
+        labels = [gh.calls[0][i + 1] for i, a in enumerate(gh.calls[0]) if a == "--label"]
+        self.assertIn("tech-debt", labels)
+        self.assertIn("tech-debt:autofix-safe", labels)
+
+    def test_no_verdict_keeps_old_single_label_behavior(self) -> None:
+        gh = _fake_gh_factory([_ok("https://github.com/owner/repo/issues/2\n")])
+        tech_debt.create_issue("[tech-debt] x", "body", gh_runner=gh)
+        labels = [gh.calls[0][i + 1] for i, a in enumerate(gh.calls[0]) if a == "--label"]
+        self.assertEqual(labels, ["tech-debt"])
+
+
 class IssueBodyTests(unittest.TestCase):
     def test_body_contains_required_fields(self) -> None:
         body = tech_debt.build_issue_body(
@@ -368,7 +518,7 @@ class FileCommandTests(unittest.TestCase):
             review.write_text("# Review\n\n" + _trailer_block([VALID_ITEM]))
             gh = _fake_gh_factory(
                 [
-                    _ok(json.dumps([{"name": "tech-debt"}])),  # ensure_label: present
+                    _ok(_ALL_LABELS_PRESENT),  # ensure_label: all 4 labels present
                     _ok("[]"),  # dedup check: no existing
                     _ok("https://github.com/owner/repo/issues/42\n"),  # create
                 ]
@@ -392,7 +542,7 @@ class FileCommandTests(unittest.TestCase):
             title = f"[tech-debt] {VALID_ITEM['summary']}"
             gh = _fake_gh_factory(
                 [
-                    _ok(json.dumps([{"name": "tech-debt"}])),  # ensure_label: present
+                    _ok(_ALL_LABELS_PRESENT),  # ensure_label: all 4 labels present
                     _ok(json.dumps([{"title": title}])),  # dedup: matches
                 ]
             )
@@ -412,7 +562,7 @@ class FileCommandTests(unittest.TestCase):
             review.write_text("# Review\n\n" + _trailer_block([invalid, VALID_ITEM]))
             gh = _fake_gh_factory(
                 [
-                    _ok(json.dumps([{"name": "tech-debt"}])),  # ensure_label: present
+                    _ok(_ALL_LABELS_PRESENT),  # ensure_label: all 4 labels present
                     _ok("[]"),  # dedup for the valid item
                     _ok("https://github.com/owner/repo/issues/42\n"),  # create the valid item
                 ]
@@ -422,7 +572,10 @@ class FileCommandTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             output = out.getvalue()
             self.assertIn("filed", output)
-            self.assertIn("1 filed, 0 dup, 1 invalid", output)
+            # v2.15.0 expanded the summary with verdict counts; the
+            # 0-dup / 1-invalid tail still appears.
+            self.assertIn("1 filed", output)
+            self.assertIn("0 dup, 1 invalid", output)
 
     def test_label_provisioning_failure_aborts(self) -> None:
         with TemporaryDirectory() as tmp:
