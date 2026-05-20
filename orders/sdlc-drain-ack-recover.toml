@@ -1,0 +1,5 @@
+[order]
+description = "Subscriber for gascity#2380's session.drain_acked_with_assigned_work event. Drives the 5-step Mode B recovery recipe: commit staged worktree changes via sdlc-stall-recover.sh, push the branch, clear bead assignee, kill the stalled session, reload the supervisor. Defaults OFF — enable via SDLC_DRAIN_ACK_RECOVERY_ENABLED=true in the supervisor's env. Fail-closed: any step error halts and alerts the operator via sdlc-notify.sh."
+trigger = "event"
+event = "session.drain_acked_with_assigned_work"
+exec = "$PACK_DIR/assets/scripts/sdlc-drain-ack-recover.sh"
