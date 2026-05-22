@@ -615,5 +615,176 @@ class RealGcShapeTests(unittest.TestCase):
         )
 
 
+class ObservabilityTests(unittest.TestCase):
+    """Cycle 6 — every run emits a structured summary line for validation visibility."""
+
+    def setUp(self) -> None:
+        self._tmpdir_ctx = TemporaryDirectory()
+        self._tmp_str = self._tmpdir_ctx.name
+
+    def tearDown(self) -> None:
+        self._tmpdir_ctx.cleanup()
+
+    def test_empty_run_emits_summary_line(self) -> None:
+        """Even with no beads, the detector emits its decision summary."""
+        tmp = Path(self._tmp_str)
+        gc = _fake_gc(tmp, bd_list_json="[]", session_list_json="[]")
+        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+
+        env = _base_env(tmp, gc, tmux, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(tmp / "empty-events.jsonl")
+        (tmp / "empty-events.jsonl").write_text("")
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("sdlc-alive-idle-detector: ran", result.stdout)
+        self.assertIn("in_progress=0", result.stdout)
+        self.assertIn("nudged=0", result.stdout)
+        self.assertIn("rate_limited=0", result.stdout)
+
+    def test_nudge_run_summary_shows_one_nudged(self) -> None:
+        tmp = Path(self._tmp_str)
+        bead = _bead(bead_id="el-trip")
+        session = _session(session_id="sdlc-discipline__worker-bl-test")
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps({"sessions": [session]}),
+        )
+        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-trip", last_update_seconds_ago=1800)
+
+        env = _base_env(tmp, gc, tmux, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        self.assertIn("nudged=1", result.stdout)
+        self.assertIn("stage1_pass=1", result.stdout)
+        self.assertIn("stage2_pass=1", result.stdout)
+
+
+class DailyRateLimitTests(unittest.TestCase):
+    """Cycle 7 — circuit breaker prevents false-positive storms."""
+
+    def setUp(self) -> None:
+        self._tmpdir_ctx = TemporaryDirectory()
+        self._tmp_str = self._tmpdir_ctx.name
+
+    def tearDown(self) -> None:
+        self._tmpdir_ctx.cleanup()
+
+    def test_at_daily_limit_skips_and_notifies(self) -> None:
+        """State shows 5 nudges in last 24h, limit is 5; this run rate-limits."""
+        tmp = Path(self._tmp_str)
+        bead = _bead(bead_id="el-overlimit")
+        session = _session(session_id="sdlc-discipline__worker-bl-test")
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps({"sessions": [session]}),
+        )
+        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-overlimit", last_update_seconds_ago=1800)
+
+        # Pre-populate state with 5 recent nudge timestamps (within 24h).
+        state_dir = tmp / "state"
+        state_dir.mkdir()
+        now = int(time.time())
+        envelope = {
+            "by_bead": {},
+            "recent": [now - 100, now - 200, now - 300, now - 400, now - 500],
+        }
+        (state_dir / "alive-idle-nudges.json").write_text(json.dumps(envelope))
+
+        env = _base_env(tmp, gc, tmux, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+        env["SDLC_ALIVE_IDLE_DAILY_LIMIT"] = "5"
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        # Submit must NOT fire when rate-limited.
+        gc_calls = (tmp / "gc-argv.log").read_text() if (tmp / "gc-argv.log").exists() else ""
+        self.assertNotIn("session submit", gc_calls, "rate-limited → no submit")
+        # Summary should reflect the rate limit.
+        self.assertIn("rate_limited=1", result.stdout)
+        self.assertIn("nudged=0", result.stdout)
+        # Notify should fire telling the operator the limit was hit.
+        self.assertTrue(
+            (tmp / "sdlc-notify.sh-argv.log").exists(),
+            "rate-limit hit → operator notified",
+        )
+
+    def test_below_daily_limit_proceeds(self) -> None:
+        """State shows 3 nudges in last 24h, limit is 5; this run nudges."""
+        tmp = Path(self._tmp_str)
+        bead = _bead(bead_id="el-belowlimit")
+        session = _session(session_id="sdlc-discipline__worker-bl-test")
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps({"sessions": [session]}),
+        )
+        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-belowlimit", last_update_seconds_ago=1800)
+
+        state_dir = tmp / "state"
+        state_dir.mkdir()
+        now = int(time.time())
+        envelope = {
+            "by_bead": {},
+            "recent": [now - 100, now - 200, now - 300],
+        }
+        (state_dir / "alive-idle-nudges.json").write_text(json.dumps(envelope))
+
+        env = _base_env(tmp, gc, tmux, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+        env["SDLC_ALIVE_IDLE_DAILY_LIMIT"] = "5"
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        gc_calls = (tmp / "gc-argv.log").read_text()
+        self.assertIn("session submit", gc_calls)
+        # State file should now show 4 entries in recent (3 old + 1 new).
+        state = json.loads((state_dir / "alive-idle-nudges.json").read_text())
+        self.assertEqual(len(state["recent"]), 4, f"recent should have grown by 1; state={state}")
+
+
 if __name__ == "__main__":
     unittest.main()

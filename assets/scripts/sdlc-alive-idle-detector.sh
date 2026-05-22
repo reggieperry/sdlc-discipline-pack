@@ -49,6 +49,7 @@ EVENTS_PATH="${SDLC_ALIVE_IDLE_EVENTS_PATH:-}"
 
 THRESHOLD_MINUTES="${SDLC_ALIVE_IDLE_THRESHOLD_MINUTES:-20}"
 COOLDOWN_MINUTES="${SDLC_ALIVE_IDLE_NUDGE_COOLDOWN_MINUTES:-10}"
+DAILY_LIMIT="${SDLC_ALIVE_IDLE_DAILY_LIMIT:-5}"
 ENABLED="${SDLC_ALIVE_IDLE_DETECTOR_ENABLED:-false}"
 
 if [ "$ENABLED" != "true" ]; then
@@ -101,6 +102,7 @@ CANDIDATES=$(BEADS_JSON="$BEADS_JSON" \
              EVENTS_PATH="$EVENTS_PATH" \
              THRESHOLD_MINUTES="$THRESHOLD_MINUTES" \
              COOLDOWN_MINUTES="$COOLDOWN_MINUTES" \
+             DAILY_LIMIT="$DAILY_LIMIT" \
              python3 - <<'PY'
 import json
 import os
@@ -131,17 +133,31 @@ state_file = os.environ.get("STATE_FILE", "")
 events_path = os.environ.get("EVENTS_PATH", "")
 threshold_minutes = int(os.environ.get("THRESHOLD_MINUTES", "20"))
 cooldown_minutes = int(os.environ.get("COOLDOWN_MINUTES", "10"))
+daily_limit = int(os.environ.get("DAILY_LIMIT", "5"))
 now_epoch = int(time.time())
 
-# Load state file (per-bead last-nudge timestamps). Tolerate missing/malformed.
-state = {}
+# Load state file. Two shapes supported for backward compatibility:
+#   - Bare dict {bead_id: ts}    — original v1 format
+#   - Envelope {by_bead: {...}, recent: [ts, ...]}   — v2 format (with rate-limit window)
+state_raw = {}
 if state_file:
     p = Path(state_file)
     if p.exists():
         try:
-            state = json.loads(p.read_text() or "{}")
+            state_raw = json.loads(p.read_text() or "{}")
         except (json.JSONDecodeError, OSError):
-            state = {}
+            state_raw = {}
+
+if "by_bead" in state_raw or "recent" in state_raw:
+    by_bead = state_raw.get("by_bead", {}) or {}
+    recent = state_raw.get("recent", []) or []
+else:
+    # Old v1 format — treat top-level as by_bead, no rate-limit history.
+    by_bead = state_raw
+    recent = []
+
+# Count nudges within the last 24h for the rate-limit check.
+nudges_last_24h = sum(1 for t in recent if (now_epoch - int(t)) < 86400)
 
 # Index sessions by id for O(1) lookup; record state + pane info.
 session_index = {}
@@ -186,12 +202,22 @@ if events_path:
             if ts_epoch > cur:
                 latest_update[bead_id] = ts_epoch
 
-# Walk beads; emit one line per candidate that passes stage 1 + cooldown.
+# Walk beads. Track counters along the way for the post-run summary line.
+counters = {
+    "in_progress_total": len(beads),
+    "with_assignee": 0,
+    "stage1_pass": 0,
+    "cooldown_skip": 0,
+    "rate_limited": 0,
+    "nudges_last_24h_at_start": nudges_last_24h,
+}
+
 for b in beads:
     bead_id = b.get("id")
     assignee = b.get("assignee") or b.get("metadata", {}).get("worker", {}).get("session_id")
     if not bead_id or not assignee:
         continue
+    counters["with_assignee"] += 1
     # Stage 1 — event age.
     last_ts = latest_update.get(bead_id)
     if last_ts is not None:
@@ -199,12 +225,19 @@ for b in beads:
         if age_seconds < threshold_minutes * 60:
             continue
     # else: no event found for this bead → treat as stale enough to proceed.
-    # Cooldown — skip if we nudged recently.
-    last_nudge = state.get(bead_id)
+    counters["stage1_pass"] += 1
+    # Cooldown — skip if we nudged this bead recently.
+    last_nudge = by_bead.get(bead_id)
     if last_nudge is not None:
         nudge_age = now_epoch - int(last_nudge)
         if nudge_age < cooldown_minutes * 60:
+            counters["cooldown_skip"] += 1
             continue
+    # Rate limit — skip if we've hit the daily cap. Stops false-positive storms
+    # from amplifying across many beads.
+    if nudges_last_24h >= daily_limit:
+        counters["rate_limited"] += 1
+        continue
     # Resolve session for pane info.
     s = session_index.get(assignee, {})
     meta = s.get("metadata", {}) or {}
@@ -220,19 +253,25 @@ for b in beads:
         # Fall back to session_id as pane name (matches how tmux names panes
         # in the bright-lights tmux socket).
         pane = assignee
-    print(f"{bead_id}\t{assignee}\t{pane}\t{sock}")
+    print(f"CANDIDATE\t{bead_id}\t{assignee}\t{pane}\t{sock}")
+
+# Emit summary line. Bash parses this and merges with stage-2 / nudge counters.
+print(f"SUMMARY\t{json.dumps(counters)}")
 PY
 )
 
-# If no candidates, we're done — exit clean.
-if [ -z "$CANDIDATES" ]; then
-    exit 0
-fi
+# Parse out the SUMMARY line (last line emitted by the Python heredoc) for
+# upstream counters; keep CANDIDATE lines for the per-bead pane check.
+SUMMARY_JSON=$(echo "$CANDIDATES" | awk -F'\t' '$1 == "SUMMARY" { print $2; exit }')
+CANDIDATE_LINES=$(echo "$CANDIDATES" | awk -F'\t' '$1 == "CANDIDATE"')
 
 EXIT_CODE=0
 NUDGED_BEADS=()
+STAGE2_PASS=0
+NUDGED=0
+SUBMIT_FAILED=0
 
-while IFS=$'\t' read -r BEAD_ID SESSION_ID TMUX_PANE TMUX_SOCKET; do
+while IFS=$'\t' read -r _TAG BEAD_ID SESSION_ID TMUX_PANE TMUX_SOCKET; do
     [ -z "$BEAD_ID" ] && continue
 
     # Stage 2 — pane signature. Build tmux invocation honoring socket override.
@@ -260,21 +299,26 @@ while IFS=$'\t' read -r BEAD_ID SESSION_ID TMUX_PANE TMUX_SOCKET; do
         continue
     fi
 
+    STAGE2_PASS=$((STAGE2_PASS + 1))
+
     # Action — submit the synthetic user turn.
     if "$GC_BIN" session submit "$SESSION_ID" "continue" --intent default >/dev/null 2>&1; then
         NUDGED_BEADS+=("$BEAD_ID")
+        NUDGED=$((NUDGED + 1))
         "$NOTIFY_BIN" --subject "alive-idle nudge fired" \
                       --body "Nudged stalled worker session $SESSION_ID (bead $BEAD_ID)" \
                       >/dev/null 2>&1 || true
     else
         EXIT_CODE=1
+        SUBMIT_FAILED=$((SUBMIT_FAILED + 1))
         "$NOTIFY_BIN" --subject "alive-idle nudge FAILED" \
                       --body "gc session submit failed for $SESSION_ID (bead $BEAD_ID)" \
                       >/dev/null 2>&1 || true
     fi
-done <<< "$CANDIDATES"
+done <<< "$CANDIDATE_LINES"
 
-# Update state file with successful nudges.
+# Update state file with successful nudges. Migrates to the envelope format
+# {by_bead: {...}, recent: [ts, ...]} on every write, prunes recent[] to last 25h.
 if [ ${#NUDGED_BEADS[@]} -gt 0 ]; then
     NUDGED_LIST=$(printf '%s\n' "${NUDGED_BEADS[@]}")
     STATE_FILE="$STATE_FILE" NUDGED_LIST="$NUDGED_LIST" python3 - <<'PY'
@@ -286,21 +330,60 @@ nudged = [b for b in os.environ.get("NUDGED_LIST", "").splitlines() if b.strip()
 now_epoch = int(time.time())
 
 p = Path(state_file)
-state = {}
+state_raw = {}
 if p.exists():
     try:
-        state = json.loads(p.read_text() or "{}")
+        state_raw = json.loads(p.read_text() or "{}")
     except (json.JSONDecodeError, OSError):
-        state = {}
+        state_raw = {}
+
+# Migrate old format if needed.
+if "by_bead" in state_raw or "recent" in state_raw:
+    by_bead = state_raw.get("by_bead", {}) or {}
+    recent = state_raw.get("recent", []) or []
+else:
+    by_bead = state_raw
+    recent = []
 
 for b in nudged:
-    state[b] = now_epoch
+    by_bead[b] = now_epoch
+    recent.append(now_epoch)
 
+# Prune anything older than 25h from recent[] (keeps a 1h buffer above the 24h rate-limit window).
+cutoff = now_epoch - (25 * 3600)
+recent = [int(t) for t in recent if int(t) >= cutoff]
+
+envelope = {"by_bead": by_bead, "recent": sorted(recent)}
 try:
-    p.write_text(json.dumps(state, sort_keys=True))
+    p.write_text(json.dumps(envelope, sort_keys=True))
 except OSError as e:
     print(f"state-file write failed: {e}", file=__import__("sys").stderr)
 PY
+fi
+
+# Per-run log line for observability. Goes to stdout where the order tick
+# captures it. Format mirrors the supervisor's structured fields so an
+# operator can grep events.jsonl for `sdlc-alive-idle-detector:` to
+# reconstruct what was decided each run.
+RUN_TS=$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z)
+if [ -n "$SUMMARY_JSON" ]; then
+    IN_PROGRESS=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('in_progress_total',0))")
+    WITH_ASSIGNEE=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('with_assignee',0))")
+    STAGE1_PASS=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('stage1_pass',0))")
+    COOLDOWN_SKIP=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('cooldown_skip',0))")
+    RATE_LIMITED=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('rate_limited',0))")
+    NUDGES_24H=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('nudges_last_24h_at_start',0))")
+else
+    IN_PROGRESS=0; WITH_ASSIGNEE=0; STAGE1_PASS=0; COOLDOWN_SKIP=0; RATE_LIMITED=0; NUDGES_24H=0
+fi
+echo "sdlc-alive-idle-detector: ran ts=$RUN_TS in_progress=$IN_PROGRESS with_assignee=$WITH_ASSIGNEE stage1_pass=$STAGE1_PASS cooldown_skip=$COOLDOWN_SKIP rate_limited=$RATE_LIMITED stage2_pass=$STAGE2_PASS nudged=$NUDGED submit_failed=$SUBMIT_FAILED nudges_24h_at_start=$NUDGES_24H daily_limit=$DAILY_LIMIT"
+
+# If we hit the rate limit on this run, emit a single notify so the operator
+# knows the detector is firing more often than its threshold permits.
+if [ -n "$SUMMARY_JSON" ] && [ "$RATE_LIMITED" -gt 0 ]; then
+    "$NOTIFY_BIN" --subject "alive-idle detector rate-limited" \
+                  --body "Daily nudge limit ($DAILY_LIMIT) reached; $RATE_LIMITED bead(s) skipped this run. Investigate why so many stalls." \
+                  >/dev/null 2>&1 || true
 fi
 
 exit "$EXIT_CODE"
