@@ -109,8 +109,24 @@ import sys
 import time
 from pathlib import Path
 
-beads = json.loads(os.environ.get("BEADS_JSON", "[]") or "[]")
-sessions = json.loads(os.environ.get("SESSIONS_JSON", "[]") or "[]")
+beads_raw = json.loads(os.environ.get("BEADS_JSON", "[]") or "[]")
+sessions_raw = json.loads(os.environ.get("SESSIONS_JSON", "[]") or "[]")
+
+# Tolerate both shapes: bare array (`[]`) or object-with-list-key (`{sessions: [...]}`).
+# Real gc CLI: `gc bd list --json` returns a bare array; `gc session list --json`
+# returns `{filters, ok, sessions, summary}`. Tests historically passed bare
+# arrays — production exposed the discrepancy on first smoke.
+def _as_list(value, list_key):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        inner = value.get(list_key)
+        if isinstance(inner, list):
+            return inner
+    return []
+
+beads = _as_list(beads_raw, "beads")
+sessions = _as_list(sessions_raw, "sessions")
 state_file = os.environ.get("STATE_FILE", "")
 events_path = os.environ.get("EVENTS_PATH", "")
 threshold_minutes = int(os.environ.get("THRESHOLD_MINUTES", "20"))

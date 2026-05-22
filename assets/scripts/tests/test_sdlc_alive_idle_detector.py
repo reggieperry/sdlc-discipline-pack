@@ -557,5 +557,63 @@ class RateLimitTests(unittest.TestCase):
         self.assertIn("session submit", gc_calls)
 
 
+class RealGcShapeTests(unittest.TestCase):
+    """Cycle 5 — pin the actual shapes the real `gc` CLI returns.
+
+    Surfaced on the v2.21.0 deploy smoke: `gc session list --json` returns
+    an object with a `sessions` key, not a bare array. The detector must
+    tolerate both shapes since the original tests passed arrays.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir_ctx = TemporaryDirectory()
+        self._tmp_str = self._tmpdir_ctx.name
+
+    def tearDown(self) -> None:
+        self._tmpdir_ctx.cleanup()
+
+    def test_session_list_object_shape_is_parsed(self) -> None:
+        """gc session list --json returns {filters, ok, sessions, summary}."""
+        tmp = Path(self._tmp_str)
+        bead = _bead(bead_id="el-stuck")
+        session = _session(session_id="sdlc-discipline__worker-bl-test")
+        # Real production shape from gc session list --json output:
+        session_envelope = {
+            "filters": {},
+            "ok": True,
+            "schema_version": "1",
+            "sessions": [session],
+            "summary": {"total": 1, "active": 1, "suspended": 0, "closed": 0},
+        }
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps(session_envelope),
+        )
+        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
+
+        env = _base_env(tmp, gc, tmux, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        gc_calls = (tmp / "gc-argv.log").read_text()
+        self.assertIn(
+            "session submit",
+            gc_calls,
+            f"object-shape session list should still resolve the assignee; gc_calls=\n{gc_calls}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
