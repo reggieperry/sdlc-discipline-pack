@@ -58,6 +58,36 @@ fi
 mkdir -p "$STATE_DIR" 2>/dev/null || { echo "state dir create failed" >&2; exit 2; }
 STATE_FILE="$STATE_DIR/alive-idle-nudges.json"
 
+# Resolve events.jsonl path. Production sources, in order:
+#   1. SDLC_ALIVE_IDLE_EVENTS_PATH explicit override (used by tests)
+#   2. $GC_CITY_ROOT/.gc/events.jsonl
+#   3. Walk up from $PWD looking for a directory containing .gc/events.jsonl
+#   4. gc cities first-row fallback
+# Fail-closed: if we can't resolve, log and exit 2 — refusing to act is the
+# right behavior, since without event-age we'd false-positive on every bead.
+if [ -z "$EVENTS_PATH" ]; then
+    CITY_ROOT="${GC_CITY_ROOT:-}"
+    if [ -z "$CITY_ROOT" ]; then
+        # Walk up from $PWD looking for .gc/events.jsonl.
+        d="$PWD"
+        while [ "$d" != "/" ] && [ -n "$d" ]; do
+            if [ -f "$d/.gc/events.jsonl" ]; then
+                CITY_ROOT="$d"
+                break
+            fi
+            d=$(dirname "$d")
+        done
+    fi
+    if [ -z "$CITY_ROOT" ]; then
+        CITY_ROOT=$("$GC_BIN" cities 2>/dev/null | awk 'NR>1 {print $2; exit}')
+    fi
+    if [ -z "$CITY_ROOT" ] || [ ! -f "$CITY_ROOT/.gc/events.jsonl" ]; then
+        echo "sdlc-alive-idle-detector: cannot resolve events.jsonl path (GC_CITY_ROOT='${GC_CITY_ROOT:-}' PWD='$PWD'); aborting" >&2
+        exit 2
+    fi
+    EVENTS_PATH="$CITY_ROOT/.gc/events.jsonl"
+fi
+
 # Stage A: fetch in_progress beads and the session list.
 BEADS_JSON=$("$GC_BIN" bd list --status=in_progress --json 2>/dev/null || echo "[]")
 SESSIONS_JSON=$("$GC_BIN" session list --json 2>/dev/null || echo "[]")
