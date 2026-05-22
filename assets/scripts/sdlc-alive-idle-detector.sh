@@ -159,13 +159,18 @@ else:
 # Count nudges within the last 24h for the rate-limit check.
 nudges_last_24h = sum(1 for t in recent if (now_epoch - int(t)) < 86400)
 
-# Index sessions by id for O(1) lookup; record state + pane info.
+# Index sessions by EVERY identifier a bead's assignee field might reference.
+# Real `gc session list --json` populates `id`, `session_name`, `name`, and
+# sometimes `alias` at the top level. Pool worker beads carry the long-form
+# session_name (e.g., `sdlc-discipline__worker-bl-d5vmvea`) as the assignee,
+# not the short `id`. Indexing all keys lets the lookup work regardless of
+# which form was written to the bead.
 session_index = {}
 for s in sessions:
-    sid = s.get("id") or s.get("metadata", {}).get("session_name")
-    if not sid:
-        continue
-    session_index[sid] = s
+    for key in ("id", "session_name", "name", "alias"):
+        v = s.get(key)
+        if v:
+            session_index.setdefault(v, s)
 
 # Pre-parse events.jsonl once: dict[bead_id] -> latest ts (seconds since epoch).
 # Each line is JSON with ts (ISO local-time string) and message containing the
@@ -238,22 +243,16 @@ for b in beads:
     if nudges_last_24h >= daily_limit:
         counters["rate_limited"] += 1
         continue
-    # Resolve session for pane info.
+    # Resolve session. We need the canonical id-or-alias for `gc session peek`.
     s = session_index.get(assignee, {})
-    meta = s.get("metadata", {}) or {}
-    pane = meta.get("tmux_pane", "")
-    sock = meta.get("tmux_socket", "")
     # State of session — only proceed if explicitly "active". Defensive: any
     # session not classified active gets skipped (creating/suspended/closing).
     if s.get("state", "active") != "active":
         continue
-    # If we have no pane name, we can't capture — skip (would be a multi-rig
-    # follow-up to derive it from session_name).
-    if not pane:
-        # Fall back to session_id as pane name (matches how tmux names panes
-        # in the bright-lights tmux socket).
-        pane = assignee
-    print(f"CANDIDATE\t{bead_id}\t{assignee}\t{pane}\t{sock}")
+    # Prefer alias > session_name > id for the peek/submit target — they all
+    # resolve, but the alias is the most stable across session lifecycles.
+    target = s.get("alias") or s.get("session_name") or s.get("id") or assignee
+    print(f"CANDIDATE\t{bead_id}\t{target}")
 
 # Emit summary line. Bash parses this and merges with stage-2 / nudge counters.
 print(f"SUMMARY\t{json.dumps(counters)}")
@@ -271,24 +270,23 @@ STAGE2_PASS=0
 NUDGED=0
 SUBMIT_FAILED=0
 
-while IFS=$'\t' read -r _TAG BEAD_ID SESSION_ID TMUX_PANE TMUX_SOCKET; do
+while IFS=$'\t' read -r _TAG BEAD_ID TARGET; do
     [ -z "$BEAD_ID" ] && continue
 
-    # Stage 2 — pane signature. Build tmux invocation honoring socket override.
-    if [ -n "$TMUX_SOCKET" ]; then
-        PANE_CONTENT=$("$TMUX_BIN" -S "$TMUX_SOCKET" capture-pane -t "$TMUX_PANE" -p 2>/dev/null || true)
-    else
-        PANE_CONTENT=$("$TMUX_BIN" capture-pane -t "$TMUX_PANE" -p 2>/dev/null || true)
-    fi
+    # Stage 2 — pane signature via `gc session peek`. The CLI handles tmux
+    # socket discovery internally and works against the same surface that
+    # `gc session submit` would write to. Capture more lines than the default
+    # 50 to be sure we see the prompt and footer.
+    PANE_CONTENT=$("$GC_BIN" session peek "$TARGET" --lines 100 2>/dev/null || true)
 
     # Reject if any live busy marker is present. 'esc to interrupt' is the
     # canonical signal — gascity's paneContainsBusyIndicator uses the same
-    # string. 'Implementing…' and 'Crafting…' are belt-and-suspenders:
-    # they appear with the ✽ live-activity glyph and would only show during
-    # the model's working phase. Past-tense markers like 'Brewed for X' and
+    # string. 'Implementing…' / 'Crafting…' / 'Baking…' are belt-and-suspenders:
+    # they appear with the ✽ / ✢ live-activity glyphs and would only show
+    # during the model's working phase. Past-tense markers like 'Brewed for X',
     # 'Cooked for X' are NOT busy markers — they persist into the at-prompt
     # idle state showing the last turn's duration.
-    if echo "$PANE_CONTENT" | grep -qE 'esc to interrupt|Implementing…|Crafting…'; then
+    if echo "$PANE_CONTENT" | grep -qE 'esc to interrupt|Implementing…|Crafting…|Baking…'; then
         continue
     fi
     # Require both the prompt glyph and the 'new task?' footer hint.
@@ -302,17 +300,17 @@ while IFS=$'\t' read -r _TAG BEAD_ID SESSION_ID TMUX_PANE TMUX_SOCKET; do
     STAGE2_PASS=$((STAGE2_PASS + 1))
 
     # Action — submit the synthetic user turn.
-    if "$GC_BIN" session submit "$SESSION_ID" "continue" --intent default >/dev/null 2>&1; then
+    if "$GC_BIN" session submit "$TARGET" "continue" --intent default >/dev/null 2>&1; then
         NUDGED_BEADS+=("$BEAD_ID")
         NUDGED=$((NUDGED + 1))
         "$NOTIFY_BIN" --subject "alive-idle nudge fired" \
-                      --body "Nudged stalled worker session $SESSION_ID (bead $BEAD_ID)" \
+                      --body "Nudged stalled worker session $TARGET (bead $BEAD_ID)" \
                       >/dev/null 2>&1 || true
     else
         EXIT_CODE=1
         SUBMIT_FAILED=$((SUBMIT_FAILED + 1))
         "$NOTIFY_BIN" --subject "alive-idle nudge FAILED" \
-                      --body "gc session submit failed for $SESSION_ID (bead $BEAD_ID)" \
+                      --body "gc session submit failed for $TARGET (bead $BEAD_ID)" \
                       >/dev/null 2>&1 || true
     fi
 done <<< "$CANDIDATE_LINES"

@@ -1,8 +1,8 @@
 """Tests for sdlc-alive-idle-detector.sh (pack#86 — Mode C workaround).
 
 Black-box subprocess tests. Each test stands up a tempdir holding fake
-`gc`, `tmux`, and `sdlc-notify.sh` binaries that record their argv. The
-script under test is invoked with a controlled env; assertions read the
+`gc` and `sdlc-notify.sh` binaries that record their argv. The script
+under test is invoked with a controlled env; assertions read the
 recorded argv to verify the call sequence.
 
 stdlib-only (`unittest` + tempfile + subprocess + textwrap). Matches the
@@ -75,6 +75,7 @@ def _fake_gc(
     *,
     bd_list_json: str = "[]",
     session_list_json: str = "[]",
+    peek_output: str = "",
     submit_exit: int = 0,
 ) -> Path:
     """Build a fake `gc` binary that dispatches on subcommand and records argv.
@@ -86,6 +87,7 @@ def _fake_gc(
     Dispatch:
     - `gc bd list --status=in_progress --json` → echoes bd_list_json
     - `gc session list --json` → echoes session_list_json
+    - `gc session peek <target> --lines N` → echoes peek_output
     - `gc session submit <id> "continue" --intent default` → exits submit_exit
     - everything else → exits 0
     """
@@ -107,40 +109,15 @@ __BD_EOF__
 __SL_EOF__
             exit 0
         fi
+        if [ "$1" = "session" ] && [ "$2" = "peek" ]; then
+            cat <<'__PEEK_EOF__'
+{peek_output}
+__PEEK_EOF__
+            exit 0
+        fi
         if [ "$1" = "session" ] && [ "$2" = "submit" ]; then
             exit {submit_exit}
         fi
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
-def _fake_tmux(tmp: Path, pane_content: str) -> Path:
-    """Build a fake `tmux` binary that returns pane_content for capture-pane.
-
-    Dispatch:
-    - `tmux capture-pane ... -p` → emits pane_content to stdout
-    - everything else → exits 0
-
-    Records argv to <tmp>/tmux-argv.log.
-    """
-    path = tmp / "tmux"
-    # Encode pane content as a Python expression to handle any shell-unfriendly chars.
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/tmux-argv.log"
-        echo "tmux $@" >> "{tmp}/call-sequence.log"
-        for arg in "$@"; do
-            if [ "$arg" = "capture-pane" ]; then
-                cat <<'__PANE_EOF__'
-{pane_content}
-__PANE_EOF__
-                exit 0
-            fi
-        done
         exit 0
         """
     )
@@ -186,20 +163,26 @@ def _bead(
 
 def _session(
     *,
-    session_id: str = "sdlc-discipline__worker-bl-test",
+    session_id: str = "bl-test",
+    session_name: str = "sdlc-discipline__worker-bl-test",
     state: str = "active",
-    pane: str = "bright-lights:sdlc-discipline__worker-bl-test",
-    tmux_socket: str = "/tmp/tmux-1000/bright-lights",
+    alias: str = "",
 ) -> dict:
-    return {
+    """Build a session record matching the real `gc session list --json` shape.
+
+    Real gc puts session_name + alias + name at the TOP level, not in metadata.
+    Production bead.assignee usually carries the long-form session_name; the
+    detector must therefore resolve assignees by every top-level identifier.
+    """
+    rec = {
         "id": session_id,
+        "session_name": session_name,
+        "name": session_name,
         "state": state,
-        "metadata": {
-            "session_name": session_id,
-            "tmux_pane": pane,
-            "tmux_socket": tmux_socket,
-        },
     }
+    if alias:
+        rec["alias"] = alias
+    return rec
 
 
 def _events_file(tmp: Path, *, bead_id: str, last_update_seconds_ago: int) -> Path:
@@ -217,13 +200,12 @@ def _events_file(tmp: Path, *, bead_id: str, last_update_seconds_ago: int) -> Pa
     return path
 
 
-def _base_env(tmp: Path, gc_path: Path, tmux_path: Path, notify_path: Path) -> dict:
+def _base_env(tmp: Path, gc_path: Path, notify_path: Path) -> dict:
     """Standard test env wiring all injection points + clearing PATH."""
     return {
         **os.environ,
         "PATH": f"{tmp}:{os.environ.get('PATH', '')}",
         "SDLC_ALIVE_IDLE_GC": str(gc_path),
-        "SDLC_ALIVE_IDLE_TMUX": str(tmux_path),
         "SDLC_ALIVE_IDLE_NOTIFY": str(notify_path),
         "SDLC_ALIVE_IDLE_STATE_DIR": str(tmp / "state"),
     }
@@ -235,11 +217,10 @@ class FeatureGateTests(unittest.TestCase):
     def test_exits_zero_when_enabled_env_unset(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            gc = _fake_gc(tmp, bd_list_json=json.dumps([_bead()]))
-            tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+            gc = _fake_gc(tmp, bd_list_json=json.dumps([_bead()]), peek_output=PANE_AT_PROMPT_IDLE)
             notify = _fake_recorder(tmp, "sdlc-notify.sh")
 
-            env = _base_env(tmp, gc, tmux, notify)
+            env = _base_env(tmp, gc, notify)
             env.pop("SDLC_ALIVE_IDLE_DETECTOR_ENABLED", None)
 
             result = subprocess.run(
@@ -259,19 +240,14 @@ class FeatureGateTests(unittest.TestCase):
                 (tmp / "gc-argv.log").exists(),
                 "disabled gate should not invoke gc",
             )
-            self.assertFalse(
-                (tmp / "tmux-argv.log").exists(),
-                "disabled gate should not invoke tmux",
-            )
 
     def test_exits_zero_when_enabled_env_is_false(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            gc = _fake_gc(tmp, bd_list_json=json.dumps([_bead()]))
-            tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+            gc = _fake_gc(tmp, bd_list_json=json.dumps([_bead()]), peek_output=PANE_AT_PROMPT_IDLE)
             notify = _fake_recorder(tmp, "sdlc-notify.sh")
 
-            env = _base_env(tmp, gc, tmux, notify)
+            env = _base_env(tmp, gc, notify)
             env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "false"
 
             result = subprocess.run(
@@ -303,14 +279,14 @@ class DetectionTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps(bead_list),
             session_list_json=json.dumps(session_list),
+            peek_output=pane,
         )
-        tmux = _fake_tmux(tmp, pane)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
 
         bead_id = bead_list[0]["id"] if bead_list else "el-test"
         events = _events_file(tmp, bead_id=bead_id, last_update_seconds_ago=events_age_seconds)
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
         env["SDLC_ALIVE_IDLE_THRESHOLD_MINUTES"] = str(threshold_minutes)
@@ -356,10 +332,6 @@ class DetectionTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         # tmux should never be invoked when stage 1 fails.
-        self.assertFalse(
-            (tmp / "tmux-argv.log").exists(),
-            "recent event → no pane capture",
-        )
 
     def test_busy_pane_skips_submit(self) -> None:
         """Stage 1 trips (old event) but stage 2 fails (busy marker present)."""
@@ -372,7 +344,6 @@ class DetectionTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         # tmux was called for capture; submit was not.
-        self.assertTrue((tmp / "tmux-argv.log").exists())
         gc_calls = (tmp / "gc-argv.log").read_text()
         self.assertNotIn("session submit", gc_calls, "busy pane → no submit")
 
@@ -408,12 +379,12 @@ class ActionTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
         env["SDLC_ALIVE_IDLE_THRESHOLD_MINUTES"] = "20"
@@ -449,12 +420,12 @@ class ActionTests(unittest.TestCase):
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
             submit_exit=1,  # the submit fails
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
 
@@ -490,8 +461,8 @@ class RateLimitTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-recent", last_update_seconds_ago=1800)
 
@@ -502,7 +473,7 @@ class RateLimitTests(unittest.TestCase):
         state = {"el-recent": now - 60}
         (state_dir / "alive-idle-nudges.json").write_text(json.dumps(state))
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
         env["SDLC_ALIVE_IDLE_NUDGE_COOLDOWN_MINUTES"] = "10"
@@ -528,8 +499,8 @@ class RateLimitTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stale", last_update_seconds_ago=1800)
 
@@ -539,7 +510,7 @@ class RateLimitTests(unittest.TestCase):
         state = {"el-stale": now - 1200}  # 20 min ago
         (state_dir / "alive-idle-nudges.json").write_text(json.dumps(state))
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
         env["SDLC_ALIVE_IDLE_NUDGE_COOLDOWN_MINUTES"] = "10"
@@ -589,12 +560,12 @@ class RealGcShapeTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps(session_envelope),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
 
@@ -614,6 +585,50 @@ class RealGcShapeTests(unittest.TestCase):
             f"object-shape session list should still resolve the assignee; gc_calls=\n{gc_calls}",
         )
 
+    def test_assignee_resolves_via_session_name_when_id_differs(self) -> None:
+        """Production bug: bead.assignee is the long-form session_name; gc session.id is short.
+
+        EL-133's session had id=bl-d5vmvea but session_name=
+        sdlc-discipline__worker-bl-d5vmvea. The bead's assignee field carries the
+        long form. The detector must resolve by session_name, not just id.
+        """
+        tmp = Path(self._tmp_str)
+        bead = _bead(
+            bead_id="el-prod",
+            assignee="sdlc-discipline__worker-bl-d5vmvea",
+        )
+        session = _session(
+            session_id="bl-d5vmvea",
+            session_name="sdlc-discipline__worker-bl-d5vmvea",
+        )
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps({"sessions": [session]}),
+            peek_output=PANE_AT_PROMPT_IDLE,
+        )
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-prod", last_update_seconds_ago=1800)
+
+        env = _base_env(tmp, gc, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        gc_calls = (tmp / "gc-argv.log").read_text()
+        # The submit must target the resolvable session_name (the alias-preferred
+        # path) — not the assignee string lifted blindly.
+        self.assertIn("session submit", gc_calls)
+        self.assertIn("sdlc-discipline__worker-bl-d5vmvea", gc_calls)
+
 
 class ObservabilityTests(unittest.TestCase):
     """Cycle 6 — every run emits a structured summary line for validation visibility."""
@@ -628,11 +643,12 @@ class ObservabilityTests(unittest.TestCase):
     def test_empty_run_emits_summary_line(self) -> None:
         """Even with no beads, the detector emits its decision summary."""
         tmp = Path(self._tmp_str)
-        gc = _fake_gc(tmp, bd_list_json="[]", session_list_json="[]")
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
+        gc = _fake_gc(
+            tmp, bd_list_json="[]", session_list_json="[]", peek_output=PANE_AT_PROMPT_IDLE
+        )
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(tmp / "empty-events.jsonl")
         (tmp / "empty-events.jsonl").write_text("")
@@ -659,12 +675,12 @@ class ObservabilityTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-trip", last_update_seconds_ago=1800)
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
 
@@ -701,8 +717,8 @@ class DailyRateLimitTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-overlimit", last_update_seconds_ago=1800)
 
@@ -716,7 +732,7 @@ class DailyRateLimitTests(unittest.TestCase):
         }
         (state_dir / "alive-idle-nudges.json").write_text(json.dumps(envelope))
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
         env["SDLC_ALIVE_IDLE_DAILY_LIMIT"] = "5"
@@ -751,8 +767,8 @@ class DailyRateLimitTests(unittest.TestCase):
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
+            peek_output=PANE_AT_PROMPT_IDLE,
         )
-        tmux = _fake_tmux(tmp, PANE_AT_PROMPT_IDLE)
         notify = _fake_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-belowlimit", last_update_seconds_ago=1800)
 
@@ -765,7 +781,7 @@ class DailyRateLimitTests(unittest.TestCase):
         }
         (state_dir / "alive-idle-nudges.json").write_text(json.dumps(envelope))
 
-        env = _base_env(tmp, gc, tmux, notify)
+        env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
         env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
         env["SDLC_ALIVE_IDLE_DAILY_LIMIT"] = "5"
