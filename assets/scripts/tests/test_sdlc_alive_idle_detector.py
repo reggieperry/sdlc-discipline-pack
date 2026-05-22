@@ -64,6 +64,32 @@ PANE_BUSY_BREWED = """\
   ⏵⏵ esc to interrupt · ctrl+t t…
 """
 
+# Mayor-style approval-prompt menu — detector must REJECT this. Verified live
+# 2026-05-22: sending "continue" to a session in this state would be eaten by
+# the menu's input handler, not by the model.
+PANE_INTERACTIVE_MENU = """\
+  1. Option A
+  2. Option B
+  3. Option C
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+"""
+
+# At-prompt idle WITHOUT the 'new task?' footer. The footer only renders when
+# context approaches the per-turn cap; sessions with healthy context don't show
+# it. Detector must still nudge in this state.
+PANE_AT_PROMPT_NO_FOOTER = """\
+● Standing by. Let me know what you'd like to do.
+
+✻ Cooked for 3s
+
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents ◈ max · /effort
+"""
+
 
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body)
@@ -584,6 +610,67 @@ class RealGcShapeTests(unittest.TestCase):
             gc_calls,
             f"object-shape session list should still resolve the assignee; gc_calls=\n{gc_calls}",
         )
+
+    def test_interactive_menu_pane_skips_submit(self) -> None:
+        """Mayor-style approval menus must NOT be nudged."""
+        tmp = Path(self._tmp_str)
+        bead = _bead(bead_id="el-menu")
+        session = _session(session_id="sdlc-discipline__worker-bl-test")
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps({"sessions": [session]}),
+            peek_output=PANE_INTERACTIVE_MENU,
+        )
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-menu", last_update_seconds_ago=1800)
+
+        env = _base_env(tmp, gc, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        gc_calls = (tmp / "gc-argv.log").read_text()
+        self.assertNotIn("session submit", gc_calls, "menu pane → no submit")
+        self.assertIn("stage2_pass=0", result.stdout)
+
+    def test_at_prompt_without_new_task_footer_still_nudges(self) -> None:
+        """Healthy-context sessions don't render the 'new task?' footer; detector still nudges."""
+        tmp = Path(self._tmp_str)
+        bead = _bead(bead_id="el-nofooter")
+        session = _session(session_id="sdlc-discipline__worker-bl-test")
+        gc = _fake_gc(
+            tmp,
+            bd_list_json=json.dumps([bead]),
+            session_list_json=json.dumps({"sessions": [session]}),
+            peek_output=PANE_AT_PROMPT_NO_FOOTER,
+        )
+        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        events = _events_file(tmp, bead_id="el-nofooter", last_update_seconds_ago=1800)
+
+        env = _base_env(tmp, gc, notify)
+        env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
+        env["SDLC_ALIVE_IDLE_EVENTS_PATH"] = str(events)
+
+        result = subprocess.run(
+            [str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        gc_calls = (tmp / "gc-argv.log").read_text()
+        self.assertIn("session submit", gc_calls)
 
     def test_assignee_resolves_via_session_name_when_id_differs(self) -> None:
         """Production bug: bead.assignee is the long-form session_name; gc session.id is short.

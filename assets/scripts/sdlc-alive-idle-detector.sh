@@ -286,14 +286,22 @@ while IFS=$'\t' read -r _TAG BEAD_ID TARGET; do
     # during the model's working phase. Past-tense markers like 'Brewed for X',
     # 'Cooked for X' are NOT busy markers — they persist into the at-prompt
     # idle state showing the last turn's duration.
+    #
+    # Also reject if an interactive menu prompt is open ('Enter to select',
+    # '↑/↓ to navigate', 'Esc to cancel' — these are mayor-style approval
+    # dialogs where any user-message injection would be interpreted as
+    # menu input or get swallowed by the dialog). Verified live during
+    # validation against mayor on 2026-05-22.
     if echo "$PANE_CONTENT" | grep -qE 'esc to interrupt|Implementing…|Crafting…|Baking…'; then
         continue
     fi
-    # Require both the prompt glyph and the 'new task?' footer hint.
-    if ! echo "$PANE_CONTENT" | grep -q '❯'; then
+    if echo "$PANE_CONTENT" | grep -qE 'Enter to select|to navigate|Esc to cancel'; then
         continue
     fi
-    if ! echo "$PANE_CONTENT" | grep -q 'new task?'; then
+    # Require the prompt glyph. The '❯' is the only universal at-prompt indicator.
+    # ('new task?' was tried initially but only appears when context approaches
+    # the per-turn cap and '/clear to save Xk tokens' shows — not universal.)
+    if ! echo "$PANE_CONTENT" | grep -q '❯'; then
         continue
     fi
 
