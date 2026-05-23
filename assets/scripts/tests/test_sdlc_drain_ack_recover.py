@@ -22,100 +22,15 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
-import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _spies import spy_gc_with_bd_show, spy_recorder
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-drain-ack-recover.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-drain-ack-recover.sh not found at {SCRIPT_PATH}"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_gc(
-    tmp: Path,
-    *,
-    bead_json: str = "",
-    show_exit: int = 0,
-    kill_exit: int = 0,
-    reload_exit: int = 0,
-    update_exit: int = 0,
-) -> Path:
-    """Build a fake `gc` binary that dispatches on subcommand and records argv.
-
-    Recorded:
-    - argv → <tmp>/gc-argv.log (one line per invocation, space-separated)
-
-    Dispatch:
-    - `gc bd --rig <rig> show <bead-id> --json` → echoes bead_json, exits show_exit
-    - `gc bd --rig <rig> update <bead-id> ...` → exits update_exit
-    - `gc session kill <session-id>` → exits kill_exit
-    - `gc supervisor reload` → exits reload_exit
-    - everything else → exits 0 silently
-
-    The fake covers every `gc` subcommand the subscriber invokes. Tests pass
-    a non-zero exit for one subcommand at a time to verify fail-closed
-    semantics without disturbing the other steps.
-    """
-    path = tmp / "gc"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/gc-argv.log"
-        echo "gc $@" >> "{tmp}/call-sequence.log"
-        if [ "$1" = "bd" ]; then
-            shift
-            # consume --rig <rig> if present
-            if [ "${{1:-}}" = "--rig" ]; then shift 2; fi
-            sub="${{1:-}}"
-            if [ "$sub" = "show" ]; then
-                cat <<'__BEAD_EOF__'
-{bead_json}
-__BEAD_EOF__
-                exit {show_exit}
-            elif [ "$sub" = "update" ]; then
-                exit {update_exit}
-            fi
-            exit 0
-        elif [ "$1" = "session" ] && [ "${{2:-}}" = "kill" ]; then
-            exit {kill_exit}
-        elif [ "$1" = "supervisor" ] && [ "${{2:-}}" = "reload" ]; then
-            exit {reload_exit}
-        fi
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
-def _fake_recorder(tmp: Path, name: str, *, exit_code: int = 0) -> Path:
-    """Build a fake binary that records argv to <tmp>/<name>-argv.log and exits.
-
-    Also appends `<name> <argv>` to <tmp>/call-sequence.log so tests can
-    verify ordering across peers in a single read.
-
-    Used for peer binaries the subscriber calls but doesn't need a parameterized
-    response from (git, sdlc-stall-recover.sh, sdlc-notify.sh).
-    """
-    path = tmp / name
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/{name}-argv.log"
-        echo "{name} $@" >> "{tmp}/call-sequence.log"
-        cat >> "{tmp}/{name}-stdin.log" 2>/dev/null || true
-        exit {exit_code}
-        """
-    )
-    _write_executable(path, body)
-    return path
 
 
 def _make_bead_json(*, work_dir: str, branch: str) -> str:
@@ -321,12 +236,12 @@ class BeadLookupTests(unittest.TestCase):
             work_dir = tmp / "rig" / ".gc" / "worktrees" / "ws-1"
             work_dir.mkdir(parents=True)
             bead_json = _make_bead_json(work_dir=str(work_dir), branch="feat/el-xyz")
-            _fake_gc(tmp, bead_json=bead_json)
+            spy_gc_with_bd_show(tmp, bead_json=bead_json)
             # Also need fakes for downstream peers so the script doesn't
             # die at a missing binary before we can inspect gc's argv log.
-            _fake_recorder(tmp, "sdlc-stall-recover.sh")
-            _fake_recorder(tmp, "git")
-            _fake_recorder(tmp, "sdlc-notify.sh")
+            spy_recorder(tmp, "sdlc-stall-recover.sh")
+            spy_recorder(tmp, "git")
+            spy_recorder(tmp, "sdlc-notify.sh")
 
             env = {
                 **os.environ,
@@ -369,10 +284,10 @@ class BeadLookupTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             state_dir = tmp / "state"
-            _fake_gc(tmp, bead_json="", show_exit=1)
-            notify = _fake_recorder(tmp, "sdlc-notify.sh")
-            _fake_recorder(tmp, "sdlc-stall-recover.sh")
-            _fake_recorder(tmp, "git")
+            spy_gc_with_bd_show(tmp, bead_json="", show_exit=1)
+            notify = spy_recorder(tmp, "sdlc-notify.sh")
+            spy_recorder(tmp, "sdlc-stall-recover.sh")
+            spy_recorder(tmp, "git")
 
             env = {
                 **os.environ,
@@ -428,10 +343,10 @@ class HappyPathTests(unittest.TestCase):
             work_dir.mkdir(parents=True)
 
             bead_json = _make_bead_json(work_dir=str(work_dir), branch="feat/el-xyz")
-            _fake_gc(tmp, bead_json=bead_json)
-            _fake_recorder(tmp, "sdlc-stall-recover.sh")
-            _fake_recorder(tmp, "git")
-            _fake_recorder(tmp, "sdlc-notify.sh")
+            spy_gc_with_bd_show(tmp, bead_json=bead_json)
+            spy_recorder(tmp, "sdlc-stall-recover.sh")
+            spy_recorder(tmp, "git")
+            spy_recorder(tmp, "sdlc-notify.sh")
 
             env = {
                 **os.environ,
@@ -565,16 +480,16 @@ class FailClosedTests(unittest.TestCase):
         work_dir.mkdir(parents=True)
 
         bead_json = _make_bead_json(work_dir=str(work_dir), branch="feat/el-xyz")
-        _fake_gc(
+        spy_gc_with_bd_show(
             tmp,
             bead_json=bead_json,
             update_exit=update_exit,
             kill_exit=kill_exit,
             reload_exit=reload_exit,
         )
-        _fake_recorder(tmp, "sdlc-stall-recover.sh", exit_code=sr_exit)
-        _fake_recorder(tmp, "git", exit_code=git_exit)
-        _fake_recorder(tmp, "sdlc-notify.sh")
+        spy_recorder(tmp, "sdlc-stall-recover.sh", exit_code=sr_exit)
+        spy_recorder(tmp, "git", exit_code=git_exit)
+        spy_recorder(tmp, "sdlc-notify.sh")
 
         return {
             **os.environ,
@@ -723,11 +638,11 @@ class CommitIdempotencyTests(unittest.TestCase):
             work_dir.mkdir(parents=True)
 
             bead_json = _make_bead_json(work_dir=str(work_dir), branch="feat/el-xyz")
-            _fake_gc(tmp, bead_json=bead_json)
+            spy_gc_with_bd_show(tmp, bead_json=bead_json)
             # exit 3 = "nothing to commit after exclusions" — idempotent
-            _fake_recorder(tmp, "sdlc-stall-recover.sh", exit_code=3)
-            _fake_recorder(tmp, "git")
-            _fake_recorder(tmp, "sdlc-notify.sh")
+            spy_recorder(tmp, "sdlc-stall-recover.sh", exit_code=3)
+            spy_recorder(tmp, "git")
+            spy_recorder(tmp, "sdlc-notify.sh")
 
             env = {
                 **os.environ,

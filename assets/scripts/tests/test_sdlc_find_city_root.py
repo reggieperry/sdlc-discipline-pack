@@ -18,35 +18,15 @@ Run with::
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _spies import spy_gc_cities
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "lib" / "sdlc-find-city-root.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-find-city-root.sh not found at {SCRIPT_PATH}"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_gc(fakes_dir: Path, cities_output: str = "") -> None:
-    """Fake `gc` that returns cities_output on `gc cities`."""
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/gc-argv.log"\n'
-        'if [ "$1" = "cities" ]; then\n'
-        "    cat <<'__GC_EOF__'\n"
-        f"{cities_output}\n"
-        "__GC_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "gc", body)
 
 
 def _invoke(
@@ -89,7 +69,7 @@ class GcCityRootTests(unittest.TestCase):
             (city / "city.toml").write_text("[city]\n")
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(fakes)
+            spy_gc_cities(fakes)
 
             result = _invoke(fakes, gc_city_root=str(city))
 
@@ -105,7 +85,7 @@ class GcCityRootTests(unittest.TestCase):
             wrong.mkdir()
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(fakes)
+            spy_gc_cities(fakes)
 
             result = _invoke(fakes, gc_city_root=str(wrong), cwd=fakes)
 
@@ -124,7 +104,7 @@ class WalkUpTests(unittest.TestCase):
             (city / "city.toml").write_text("[city]\n")
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(fakes)
+            spy_gc_cities(fakes)
 
             result = _invoke(fakes, cwd=deep)
 
@@ -143,7 +123,7 @@ class GcCitiesFallbackTests(unittest.TestCase):
             (city / "city.toml").write_text("[city]\n")
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(
+            spy_gc_cities(
                 fakes,
                 cities_output=f"HEADER\nbright-lights {city}\n",
             )
@@ -167,7 +147,7 @@ class MarkerArgTests(unittest.TestCase):
             # No city.toml — only the alive-idle marker exists.
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(fakes)
+            spy_gc_cities(fakes)
 
             result = _invoke(fakes, marker=".gc/events.jsonl", cwd=city)
 
@@ -182,7 +162,7 @@ class MarkerArgTests(unittest.TestCase):
             (city / ".gc" / "events.jsonl").write_text("")
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(fakes)
+            spy_gc_cities(fakes)
 
             # Asks for city.toml but only .gc/events.jsonl exists.
             result = _invoke(fakes, marker="city.toml", cwd=city)
@@ -196,7 +176,7 @@ class FailurePathTests(unittest.TestCase):
             tmp = Path(tmp_str)
             fakes = tmp / "fakes"
             fakes.mkdir()
-            _fake_gc(fakes)  # empty cities output
+            spy_gc_cities(fakes)  # empty cities output
 
             result = _invoke(fakes, cwd=tmp)
 
