@@ -78,12 +78,13 @@ reconcile_rig() {
 
     local actions_out
     actions_out=$(cd "$rig_root" && SDLC_RIG_ROOT="$rig_root" SDLC_RIG_NAME="$rig" \
+        STORIES_PY_DIR="$(dirname "$STORIES_PY")" \
         python3 - "$rig_root" "$rig" <<'PYEOF'
 """Per-rig zombie detector. Outputs one JSON line per HIGH-confidence
 action; stdout is captured by the calling bash."""
 
 import json
-import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -94,30 +95,30 @@ RIG_NAME = sys.argv[2]
 STORIES_DIR = RIG_ROOT / "stories"
 TERMINAL_STATUSES = {"filed", "in-flight", "closed"}
 
-# Hand-parse frontmatter rather than depend on PyYAML — the pack
-# tries to stay stdlib-only.
-def parse_frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---"):
+# v2.29.5: import the canonical frontmatter parser from stories.py rather
+# than hand-rolling a divergent reimplementation. The two parsers used to
+# differ in strictness (the inline accepted `---` without a trailing
+# newline; the canonical requires `---\n`) and in the YAML subset they
+# supported (the inline did flat key:value only; the canonical handles
+# lists too). Story specs always satisfy the canonical's stricter shape
+# because `stories.py validate` (CI gate) enforces it.
+sys.path.insert(0, os.environ["STORIES_PY_DIR"])
+from stories import parse_frontmatter as _canonical_parse_frontmatter  # noqa: E402
+
+
+def parse_frontmatter(spec_path: Path) -> dict:
+    """Read + parse a story spec's frontmatter. Returns {} on any failure.
+
+    The reconciler's downstream code reads `.get()` on the result and
+    skips specs whose required fields are missing, so returning an empty
+    dict on parse failure preserves the original fail-open contract — a
+    malformed spec is skipped, not a fatal error.
+    """
+    try:
+        fm, _body = _canonical_parse_frontmatter(spec_path)
+    except (ValueError, OSError, UnicodeDecodeError):
         return {}
-    rest = text[3:]
-    end = rest.find("\n---")
-    if end == -1:
-        return {}
-    block = rest[:end]
-    out: dict[str, str] = {}
-    for line in block.splitlines():
-        line = line.rstrip()
-        if not line or line.startswith("#"):
-            continue
-        m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.*)$", line)
-        if not m:
-            continue
-        key, val = m.group(1), m.group(2).strip()
-        # Quoted string values: strip outer quotes.
-        if val.startswith(('"', "'")) and val.endswith(('"', "'")) and len(val) >= 2:
-            val = val[1:-1]
-        out[key] = val
-    return out
+    return fm
 
 
 def query_bd_for_story(story_id: str) -> dict | None:
@@ -193,11 +194,9 @@ def main() -> None:
     merged_prs: list[dict] | None = None  # lazy
 
     for spec_path in spec_files:
-        try:
-            text = spec_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        fm = parse_frontmatter(spec_path)
+        if not fm:
             continue
-        fm = parse_frontmatter(text)
         story_id = fm.get("story_id")
         status = fm.get("status", "")
         filed_as_bead = fm.get("filed_as_bead", "")
