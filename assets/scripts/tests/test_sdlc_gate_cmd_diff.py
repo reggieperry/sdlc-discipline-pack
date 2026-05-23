@@ -302,28 +302,23 @@ class CmdDiffCharacterizationTests(unittest.TestCase):
             ]
             self.assertEqual(mypy_blocks, [], "no new mypy errors → no block")
 
-    def test_diff_errors_soft_when_relocation_cancels_global_growth(self) -> None:
-        """Per-file count rise + global-net <= 0 → advisory, not block.
+    def test_baseline_only_findings_with_empty_branch_produce_no_block_or_advisory(
+        self,
+    ) -> None:
+        """Baseline carries ruff findings; branch (with no ruff binary reachable
+        in the test env) reports zero. Per-file-new is empty → no block. No
+        baseline-side decreases produce per-file rises → no advisory. Verdict=pass.
 
-        `_diff_errors` classifies a per-file increase as "soft" (advisory) when
-        the global count for the same code didn't grow — meaning the errors
-        moved between files but the total is flat or down. Pins that classification.
-
-        Setup: baseline has 1 F401 on `src/a.py` and 1 F401 on `src/b.py`.
-        Branch has 2 F401s on `src/a.py` and 0 on `src/b.py`. Per-file a.py
-        rose by 1; global F401 stays at 2 → soft, not hard.
-
-        Since we can't reach ruff in the test env, we encode the BRANCH side
-        by having the baseline already claim some load and trust that the
-        branch's empty counter naturally produces a flat-or-decreasing global.
+        This pins one branch of `_diff_errors`: the "branch empty, baseline
+        non-empty" path. The full soft-classification branch (per-file rise
+        cancelled by global decrease elsewhere) requires a fake ruff binary
+        to drive branch-side findings + can be characterized when that
+        infrastructure lands. Earlier name `test_diff_errors_soft_when_
+        relocation_cancels_global_growth` advertised the soft branch but
+        this body does not pin it; renamed to match what is actually verified
+        per the deep-reasoning evaluation's non-discriminating-outcome
+        category.
         """
-        # NOTE: This is a partial pin — full hard/soft characterization would
-        # require ruff actually running and emitting findings. The branch we
-        # CAN exercise without ruff is "baseline has findings, branch empty"
-        # which classifies as no-new-errors (per-file new = empty) → no block,
-        # no advisory. So the assertion below pins absence-of-block + absence-
-        # of-advisory rather than the soft branch directly. The soft branch's
-        # full characterization is deferred until a fake-ruff-binary lands.
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             repo = tmp / "repo"

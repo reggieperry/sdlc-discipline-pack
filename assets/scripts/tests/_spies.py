@@ -30,7 +30,10 @@ justified per Rule of Three.
 v2.29.8 (issue #113) collapsed the previous `_helpers.py` module into
 this one. `write_executable` now lives here directly (no re-export
 hop); `_fake_msmtp` was renamed `spy_msmtp` per Meszaros's Test Spy
-vocabulary. Underscore-prefix exports keep unittest discovery clean.
+vocabulary. Spy factories use the `spy_` prefix; `write_executable` is
+the lone non-spy utility re-exported for cross-file use. The module's
+own filename (`_spies.py`) carries the underscore that keeps unittest
+discovery from treating the file itself as a test case.
 
 Justified aggregate (modularity.md item 11). The module exports more
 than 7 public names — currently 13 spy factories plus the
