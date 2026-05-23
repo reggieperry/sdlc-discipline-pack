@@ -195,6 +195,11 @@ def main() -> None:
 
     for spec_path in spec_files:
         fm = parse_frontmatter(spec_path)
+        # Empty `fm` covers two cases the wrapper conflates: parse failure
+        # (ValueError / OSError / UnicodeDecodeError → {}) and legitimately
+        # empty frontmatter (`---\n---\n`). Both are skipped — a spec with
+        # no `story_id` field can't be reconciled either way, so downstream
+        # `.get()` would skip it regardless.
         if not fm:
             continue
         story_id = fm.get("story_id")
