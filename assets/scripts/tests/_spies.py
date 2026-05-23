@@ -6,8 +6,8 @@ sometimes stdin) to a log file, then returns canned output. They behave
 like Stubs from the script-under-test's perspective and like Spies from
 the assertion's perspective.
 
-They were originally inlined as `_fake_*` builders, one copy per test
-file. The duplicates lived in:
+v2.29.3 consolidated the `gc rig list` spy shape and its co-travelling
+helpers across four test files:
 
   - test_sdlc_list_rigs.py             (gc)
   - test_sdlc_exhausted_bead_retry.py  (gc, bd-list, notify)
@@ -16,12 +16,24 @@ file. The duplicates lived in:
   - test_sdlc_stale_pr_sweeper.py      (gc, bd-dispatch, gh-pr-view,
                                         python3-stories-passthrough)
 
-The Rule of Three was breached. This module is the single source.
+Three further test files still carry their own `_fake_gc` builders for
+gc surfaces this module does not yet cover — `gc bd peek`, `gc rig show`,
+event-stream payloads:
+
+  - test_sdlc_alive_idle_detector.py   (gc with bd-list + tmux-peek)
+  - test_sdlc_drain_ack_recover.py     (gc with bead-show)
+  - test_sdlc_find_city_root.py        (gc cities fallback)
+
+Migrating those needs new factories (the rig-list shape doesn't fit
+them). Tracked as a follow-on; until then the Rule of Three is partly
+breached — four files imported, three still inline.
 
 `_write_executable` is re-exported from `_helpers` so callers need only
 one import. `_fake_msmtp` stays in `_helpers.py` until its callers
 (`test_sdlc_notify.py`, `test_sdlc_finalizer_notify.py`) migrate in a
-later pass; the underscore-prefix exports keep unittest discovery clean.
+later pass — `_fake_msmtp` is itself a Spy (records argv + stdin) and
+will land in this module as `spy_msmtp` when the collapse happens.
+Underscore-prefix exports keep unittest discovery clean.
 
 Convention: every factory takes the tempdir as its first positional arg,
 writes the spy script under it, and returns the Path to the spy. The
@@ -131,7 +143,7 @@ def spy_bd_dispatch(tmp: Path, bead_responses: dict[str, str]) -> Path:
             "__BD_SHOW_EOF__\n"
             "        ;;\n"
         )
-    show_block = "".join(show_cases) if show_cases else "    *) echo '[]' ;;\n"
+    show_block = "".join(show_cases)
     body = (
         "#!/bin/bash\n"
         f'echo "$@" >> "{tmp}/bd-argv.log"\n'
@@ -200,7 +212,7 @@ def spy_gh_pr_view(tmp: Path, pr_responses: dict[int, str]) -> Path:
             "__GH_PR_EOF__\n"
             "        ;;\n"
         )
-    case_block = "".join(cases) if cases else "    *) echo '{}' ;;\n"
+    case_block = "".join(cases)
     body = (
         "#!/bin/bash\n"
         f'echo "$@" >> "{tmp}/gh-argv.log"\n'

@@ -27,21 +27,16 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from _spies import _write_executable
+from _spies import spy_bd_list
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-rebase-watcher.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-rebase-watcher.sh not found at {SCRIPT_PATH}"
 
-
-def _fake_bd_empty(fakes_dir: Path) -> Path:
-    """Fake `bd` that returns nothing on every call. The watcher exits at the
-    `[ -z "$BEAD_JSON" ] && exit 0` guard when the bd output is empty, so
-    this fake's job is to let the watcher reach that exit cleanly when the
-    gate IS passed (test 3)."""
-    path = fakes_dir / "bd"
-    body = f'#!/bin/bash\necho "$@" >> "{fakes_dir}/bd-argv.log"\nexit 0\n'
-    _write_executable(path, body)
-    return path
+# The watcher's gate-passed path reaches `bd show "$BEAD_ID"` and exits at the
+# `[ -z "$BEAD_JSON" ] && exit 0` guard when bd returns nothing. `spy_bd_list(tmp)`
+# (default empty `[]` list-response, silent exit-0 on every other subcommand) gives
+# exactly that shape — argv is logged to bd-argv.log so the gate tests can assert
+# "bd was never called" via the log's presence/absence.
 
 
 def _invoke(
@@ -77,7 +72,7 @@ class FeatureGateTests(unittest.TestCase):
     def test_new_name_false_disables(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_bd_empty(tmp)
+            spy_bd_list(tmp)
 
             result = _invoke(tmp, new_var="false")
 
@@ -95,7 +90,7 @@ class FeatureGateTests(unittest.TestCase):
         legacy name is deprecated."""
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_bd_empty(tmp)
+            spy_bd_list(tmp)
 
             result = _invoke(tmp, legacy_var="false")
 
@@ -114,7 +109,7 @@ class FeatureGateTests(unittest.TestCase):
         so the deprecation branch isn't entered)."""
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_bd_empty(tmp)
+            spy_bd_list(tmp)
 
             result = _invoke(tmp, new_var="true", legacy_var="false")
 
