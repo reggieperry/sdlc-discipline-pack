@@ -53,18 +53,15 @@ if [ ! -f "$DETECTOR_PY" ]; then
     exit 0
 fi
 
-# Enumerate rigs. Skip the HQ rig (city's own beads database; chain
-# stories don't live there) and any suspended rig.
-RIGS_JSON=$(cd "$CITY_ROOT" && gc rig list --json 2>/dev/null || echo "")
-if [ -z "$RIGS_JSON" ]; then
-    echo "sdlc-stall-detector: gc rig list returned empty; nothing to scan" >&2
-    exit 0
-fi
-
-echo "$RIGS_JSON" | jq -c '.rigs[]? | select(.is_hq != true and .suspended != true) | {name, path}' | \
-while read -r rig_entry; do
-    rig_name=$(echo "$rig_entry" | jq -r '.name')
-    rig_path=$(echo "$rig_entry" | jq -r '.path')
+# Enumerate non-HQ, non-suspended rigs via the shared library. The
+# library handles dual-shape filtering (hq OR is_hq) — prior to its
+# extraction this script filtered on `is_hq` while the other three
+# rig-enumerating scripts used `hq`; gc actually returns `hq`, so this
+# script's HQ filter silently no-op'd (no rigs were ever excluded as
+# HQ). The library closes that drift.
+RIG_LISTER="$SCRIPT_DIR/lib/sdlc-list-rigs.sh"
+while IFS=$'\t' read -r rig_name rig_path; do
+    [ -z "$rig_name" ] && continue
     if [ ! -d "$rig_path" ]; then
         continue
     fi
@@ -72,4 +69,4 @@ while read -r rig_entry; do
         cd "$rig_path"
         GC_RIG="$rig_name" python3 "$DETECTOR_PY" || true
     )
-done
+done < <(bash "$RIG_LISTER" "$CITY_ROOT")

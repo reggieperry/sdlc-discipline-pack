@@ -59,11 +59,11 @@ if [ ! -f "$STORIES_PY" ]; then
     exit 0
 fi
 
-RIGS_JSON=$(cd "$CITY_ROOT" && gc rig list --json 2>/dev/null || echo "")
-if [ -z "$RIGS_JSON" ]; then
-    echo "zombie-reconciler: gc rig list returned nothing from $CITY_ROOT" >&2
-    exit 0
-fi
+# Locate the shared rig-enumeration library relative to this script.
+# Tests override PACK_DIR to point at a fake pack root; the library
+# always ships next to this script so prefer the script-relative path.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RIG_LISTER="$SCRIPT_DIR/lib/sdlc-list-rigs.sh"
 
 # Per-rig: invoke a python heredoc that walks stories/, classifies,
 # and emits one JSON action per HIGH-confidence zombie. Bash dispatches
@@ -281,12 +281,9 @@ PYEOF
     fi
 }
 
-FILTERED_RIGS=$(echo "$RIGS_JSON" | jq -c '.rigs[] | select(.hq == false and .suspended == false)' 2>/dev/null || true)
-echo "$FILTERED_RIGS" | while IFS= read -r rig_json; do
-    [ -z "$rig_json" ] && continue
-    rig_name=$(echo "$rig_json" | jq -r '.name')
-    rig_path=$(echo "$rig_json" | jq -r '.path')
+while IFS=$'\t' read -r rig_name rig_path; do
+    [ -z "$rig_name" ] && continue
     reconcile_rig "$rig_name" "$rig_path"
-done
+done < <(bash "$RIG_LISTER" "$CITY_ROOT")
 
 exit 0
