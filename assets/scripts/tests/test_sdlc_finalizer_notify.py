@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from _helpers import _fake_msmtp, _write_executable
+from _spies import _write_executable, spy_msmtp
 
 WRAPPER_PATH = Path(__file__).resolve().parent.parent / "sdlc-finalizer-notify.sh"
 NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
@@ -31,8 +31,8 @@ NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
 def _fake_bd_with_title(tmp: Path, *, title: str) -> Path:
     """Build a fake `bd` whose `bd show <id> --json` returns the canned title.
 
-    Stays here (not in `_helpers.py`) because no other test file currently
-    needs this exact shape. Lift to `_helpers.py` when a second consumer
+    Stays here (not in `_spies.py`) because no other test file currently
+    needs this exact shape. Lift to `_spies.py` when a second consumer
     appears.
     """
     path = tmp / "bd"
@@ -66,7 +66,7 @@ class FinalizerNotifySubjectTests(unittest.TestCase):
     def test_subject_contains_rig_pr_number_and_title(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_msmtp(tmp)
+            spy_msmtp(tmp)
             _fake_bd_with_title(tmp, title="Decision audit trail")
 
             env = {
@@ -133,7 +133,7 @@ class FinalizerNotifyBodyTests(unittest.TestCase):
     def test_body_contains_pr_url_recommendation_and_signals(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_msmtp(tmp)
+            spy_msmtp(tmp)
             _fake_bd_with_title(tmp, title="Decision audit trail")
 
             env = {
@@ -204,7 +204,7 @@ class FinalizerNotifyTypeTests(unittest.TestCase):
         so each `--type`-flavored test reads as one assertion's worth
         of intent.
         """
-        _fake_msmtp(tmp)
+        spy_msmtp(tmp)
         _fake_bd_with_title(tmp, title="Decision audit trail")
         env = {
             **os.environ,

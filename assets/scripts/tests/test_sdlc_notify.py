@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from _helpers import _fake_msmtp
+from _spies import spy_msmtp
 
 NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
 
@@ -41,7 +41,7 @@ class NotifyHappyPathTests(unittest.TestCase):
     ) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_msmtp(tmp)
+            spy_msmtp(tmp)
 
             env = {
                 **os.environ,
@@ -99,7 +99,7 @@ class NotifyArgValidationTests(unittest.TestCase):
     def test_missing_subject_exits_nonzero(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_msmtp(tmp)
+            spy_msmtp(tmp)
             env = {
                 **os.environ,
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
@@ -127,7 +127,7 @@ class NotifyArgValidationTests(unittest.TestCase):
     def test_missing_recipient_env_exits_nonzero(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            _fake_msmtp(tmp)
+            spy_msmtp(tmp)
             env = {
                 **{k: v for k, v in os.environ.items() if k != "SDLC_NOTIFY_RECIPIENT"},
                 "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
