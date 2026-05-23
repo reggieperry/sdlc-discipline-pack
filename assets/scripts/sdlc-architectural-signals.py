@@ -107,6 +107,24 @@ class SignalDetail:
         return out
 
 
+@dataclass(frozen=True)
+class SignalContext:
+    """Per-invocation context shared across signal_* functions.
+
+    Bundles the four values previously threaded as a data clump through
+    every signal function — files, rig, baseline, head. Frozen to match
+    `RigConfig` and signal the read-only contract: signal functions
+    observe context state but never mutate it.
+
+    Introduced in v2.30 (audit finding #6, Tier 3).
+    """
+
+    files: list[tuple[str, str]]
+    rig: RigConfig
+    baseline: str
+    head: str
+
+
 # ---------- rig-config loading ----------------------------------------------
 
 
@@ -333,12 +351,12 @@ def assertion_count(src: str) -> int:
 # ---------- signal detectors -------------------------------------------------
 
 
-def signal_a_sensitive_files(files: list[tuple[str, str]], rig: RigConfig) -> list[SignalDetail]:
-    if not rig.present or not rig.sensitive_files:
+def signal_a_sensitive_files(ctx: SignalContext) -> list[SignalDetail]:
+    if not ctx.rig.present or not ctx.rig.sensitive_files:
         return []
     hits: list[SignalDetail] = []
-    for _status, path in files:
-        if any(fnmatch.fnmatch(path, pat) for pat in rig.sensitive_files):
+    for _status, path in ctx.files:
+        if any(fnmatch.fnmatch(path, pat) for pat in ctx.rig.sensitive_files):
             hits.append(
                 SignalDetail(
                     signal="A",
@@ -350,18 +368,16 @@ def signal_a_sensitive_files(files: list[tuple[str, str]], rig: RigConfig) -> li
     return hits
 
 
-def signal_b_protocol_signatures(
-    files: list[tuple[str, str]], rig: RigConfig, baseline: str, head: str
-) -> list[SignalDetail]:
-    if not rig.present:
+def signal_b_protocol_signatures(ctx: SignalContext) -> list[SignalDetail]:
+    if not ctx.rig.present:
         return []
     hits: list[SignalDetail] = []
-    paths = {p for _s, p in files}
-    for path in rig.protocol_modules:
+    paths = {p for _s, p in ctx.files}
+    for path in ctx.rig.protocol_modules:
         matches = [p for p in paths if fnmatch.fnmatch(p, path)]
         for matched in matches:
-            base_src = file_at(baseline, matched)
-            head_src = file_at(head, matched)
+            base_src = file_at(ctx.baseline, matched)
+            head_src = file_at(ctx.head, matched)
             if base_src is None or head_src is None:
                 continue
             base_mod = parse_module(base_src)
@@ -400,18 +416,16 @@ def signal_b_protocol_signatures(
     return hits
 
 
-def signal_c_domain_fields(
-    files: list[tuple[str, str]], rig: RigConfig, baseline: str, head: str
-) -> list[SignalDetail]:
-    if not rig.present:
+def signal_c_domain_fields(ctx: SignalContext) -> list[SignalDetail]:
+    if not ctx.rig.present:
         return []
     hits: list[SignalDetail] = []
-    paths = {p for _s, p in files}
-    for path in rig.domain_model_files:
+    paths = {p for _s, p in ctx.files}
+    for path in ctx.rig.domain_model_files:
         matches = [p for p in paths if fnmatch.fnmatch(p, path)]
         for matched in matches:
-            base_src = file_at(baseline, matched)
-            head_src = file_at(head, matched)
+            base_src = file_at(ctx.baseline, matched)
+            head_src = file_at(ctx.head, matched)
             if base_src is None or head_src is None:
                 continue
             base_mod = parse_module(base_src)
@@ -485,15 +499,13 @@ def signal_d_layer_crossing() -> tuple[list[SignalDetail], str]:
     )
 
 
-def signal_e_public_name_removal(
-    files: list[tuple[str, str]], baseline: str, head: str
-) -> list[SignalDetail]:
+def signal_e_public_name_removal(ctx: SignalContext) -> list[SignalDetail]:
     hits: list[SignalDetail] = []
-    for _status, path in files:
+    for _status, path in ctx.files:
         if not path.endswith(".py"):
             continue
-        base_src = file_at(baseline, path)
-        head_src = file_at(head, path)
+        base_src = file_at(ctx.baseline, path)
+        head_src = file_at(ctx.head, path)
         if base_src is None or head_src is None:
             continue
         base_mod = parse_module(base_src)
@@ -523,17 +535,15 @@ def signal_e_public_name_removal(
     return hits
 
 
-def signal_f_assertion_regression(
-    files: list[tuple[str, str]], baseline: str, head: str
-) -> list[SignalDetail]:
+def signal_f_assertion_regression(ctx: SignalContext) -> list[SignalDetail]:
     hits: list[SignalDetail] = []
-    for _status, path in files:
+    for _status, path in ctx.files:
         if not path.endswith(".py"):
             continue
         if "test" not in Path(path).name and "/tests/" not in path:
             continue
-        base_src = file_at(baseline, path) or ""
-        head_src = file_at(head, path) or ""
+        base_src = file_at(ctx.baseline, path) or ""
+        head_src = file_at(ctx.head, path) or ""
         base_count = assertion_count(base_src)
         head_count = assertion_count(head_src)
         if head_count < base_count:
@@ -582,6 +592,7 @@ def run(baseline: str, head: str, rig_config_path: Path) -> dict[str, object]:
     files = changed_files(baseline, head)
     lines_added, lines_removed = numstat(baseline, head)
     edits_bodies = edits_existing_function_bodies(baseline, head)
+    ctx = SignalContext(files=files, rig=rig, baseline=baseline, head=head)
 
     details: list[SignalDetail] = []
     if not rig.present:
@@ -596,13 +607,13 @@ def run(baseline: str, head: str, rig_config_path: Path) -> dict[str, object]:
             )
         )
 
-    details += signal_a_sensitive_files(files, rig)
-    details += signal_b_protocol_signatures(files, rig, baseline, head)
-    details += signal_c_domain_fields(files, rig, baseline, head)
+    details += signal_a_sensitive_files(ctx)
+    details += signal_b_protocol_signatures(ctx)
+    details += signal_c_domain_fields(ctx)
     d_hits, d_availability = signal_d_layer_crossing()
     details += d_hits
-    details += signal_e_public_name_removal(files, baseline, head)
-    details += signal_f_assertion_regression(files, baseline, head)
+    details += signal_e_public_name_removal(ctx)
+    details += signal_f_assertion_regression(ctx)
 
     fired = sorted({d.signal for d in details if d.signal != "MISSING_CONFIG"})
     if not rig.present:
