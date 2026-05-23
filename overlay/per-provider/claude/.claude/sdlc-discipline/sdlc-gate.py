@@ -408,36 +408,128 @@ def _translate(counter: Counter, rename_map: dict[str, str], deleted: set[str]) 
     return out
 
 
-def cmd_diff(args: argparse.Namespace) -> None:
-    base_dir = Path(args.baseline_dir)
-    if not base_dir.exists():
-        sys.stderr.write(f"sdlc-gate: baseline dir {base_dir} missing\n")
-        sys.exit(2)
+def _load_baseline_snapshots(base_dir: Path) -> dict:
+    """Load all baseline JSON snapshots from `base_dir`.
 
+    Re-normalizes mypy codes on load (pre-v2.9.2 baselines may carry
+    un-normalized codes; without re-normalizing here the identity
+    comparison sees a code-rename and flags false-positive regressions).
+    Treats `bandit.json` as optional — pre-v2.9 baselines lack it.
+    """
     baseline_sha = (base_dir / "sha.txt").read_text().strip()
     baseline_ruff = _deserialize(json.loads((base_dir / "ruff.json").read_text()))
-    # Re-normalize mypy codes on load. Pre-v2.9.2 baselines may carry
-    # un-normalized codes (e.g. raw `import-not-found`); the branch counter
-    # is normalized at run_mypy time. Without re-normalizing the baseline,
-    # the identity comparison sees a code-rename and flags a false-positive
-    # regression. Post-v2.9.2 baselines are already normalized so the
-    # re-pass is a no-op for them.
     baseline_mypy_raw = _deserialize(json.loads((base_dir / "mypy.json").read_text()))
     baseline_mypy: Counter = Counter()
     for (file, code), n in baseline_mypy_raw.items():
         baseline_mypy[(file, _normalize_mypy_code(code))] += n
-    # bandit.json is optional — pre-v2.9 baselines lack it. Treat absence as
-    # "no baseline findings" so a v2.9 gate against a v2.4-baseline still
-    # runs cleanly; the only effect is that bandit anti-weakening compares
-    # branch findings against an empty baseline.
     bandit_path = base_dir / "bandit.json"
     baseline_bandit = (
         _deserialize(json.loads(bandit_path.read_text())) if bandit_path.exists() else Counter()
     )
     baseline_supp = _deserialize(json.loads((base_dir / "suppressions.json").read_text()))
     baseline_pytest = json.loads((base_dir / "pytest-weakening.json").read_text())
+    return {
+        "sha": baseline_sha,
+        "ruff": baseline_ruff,
+        "mypy": baseline_mypy,
+        "bandit": baseline_bandit,
+        "supp": baseline_supp,
+        "pytest": baseline_pytest,
+    }
 
-    rename_map, deleted = _git_rename_map(baseline_sha)
+
+def _diff_errors(
+    branch_c: Counter,
+    base_c: Counter,
+    label: str,
+    rename_map: dict[str, str],
+    deleted: set[str],
+) -> tuple[list[dict], list[dict]]:
+    """Check A: per-(file, code) error identity diff against a translated baseline.
+
+    A per-file count increase is "hard" (blocks) when the global count for
+    that code also rose, "soft" (advisory) when the file's increase is
+    cancelled by a decrease elsewhere — that's a relocation, not a new
+    error. Returns (blocks_to_add, advisories_to_add) for the caller.
+    """
+    translated = _translate(base_c, rename_map, deleted)
+    per_file_new: list[dict] = []
+    for (file, code), n in branch_c.items():
+        base_n = translated.get((file, code), 0)
+        if n > base_n:
+            per_file_new.append({"file": file, "code": code, "new": n - base_n})
+    global_branch: Counter = Counter()
+    for (file, code), n in branch_c.items():
+        global_branch[code] += n
+    global_base: Counter = Counter()
+    for (file, code), n in translated.items():
+        global_base[code] += n
+    hard: list[dict] = []
+    soft: list[dict] = []
+    for entry in per_file_new:
+        net = global_branch[entry["code"]] - global_base[entry["code"]]
+        entry["global_net"] = net
+        if net <= 0:
+            soft.append(entry)
+        else:
+            hard.append(entry)
+    blocks_out: list[dict] = []
+    advisories_out: list[dict] = []
+    if hard:
+        blocks_out.append({"check": f"A.{label}", "kind": "new_errors", "items": hard})
+    if soft:
+        advisories_out.append({"check": f"A.{label}", "kind": "relocated_errors", "items": soft})
+    return blocks_out, advisories_out
+
+
+def _check_pytest_weakening(
+    branch_pytest: dict,
+    baseline_pytest: dict,
+    rename_map: dict[str, str],
+    deleted: set[str],
+) -> list[dict]:
+    """Check D: new pytest.mark.skip markers + dropped assertion counts.
+
+    Returns a list of block dicts to append to the report. Skip-marker
+    increases (Check D.skips) and assertion-count regressions (Check
+    D.asserts) are both hard blocks — neither has an advisory branch.
+    """
+    blocks_out: list[dict] = []
+
+    new_skips: list[dict] = []
+    for file, n in branch_pytest["skips"].items():
+        base_n = 0
+        for bf, bn in baseline_pytest["skips"].items():
+            if rename_map.get(bf, bf) == file:
+                base_n = bn
+                break
+        if n > base_n:
+            new_skips.append({"file": file, "new": n - base_n})
+    if new_skips:
+        blocks_out.append({"check": "D.skips", "kind": "new_skip_markers", "items": new_skips})
+
+    lost_asserts: list[dict] = []
+    for bf, base_n in baseline_pytest["asserts"].items():
+        if bf in deleted:
+            continue
+        new_f = rename_map.get(bf, bf)
+        n = branch_pytest["asserts"].get(new_f, 0)
+        if n < base_n:
+            lost_asserts.append({"file": new_f, "lost": base_n - n})
+    if lost_asserts:
+        blocks_out.append({"check": "D.asserts", "kind": "lost_assertions", "items": lost_asserts})
+
+    return blocks_out
+
+
+def cmd_diff(args: argparse.Namespace) -> None:
+    base_dir = Path(args.baseline_dir)
+    if not base_dir.exists():
+        sys.stderr.write(f"sdlc-gate: baseline dir {base_dir} missing\n")
+        sys.exit(2)
+
+    baseline = _load_baseline_snapshots(base_dir)
+    rename_map, deleted = _git_rename_map(baseline["sha"])
 
     root = Path().resolve()
     branch_ruff = run_ruff(root)
@@ -449,44 +541,18 @@ def cmd_diff(args: argparse.Namespace) -> None:
     blocks: list[dict] = []
     advisories: list[dict] = []
 
-    # --- Check A: per-(file, code) error identity diff ------------------------
+    # Check A: error-identity diff for ruff, mypy, bandit
+    for branch_c, base_c, label in (
+        (branch_ruff, baseline["ruff"], "ruff"),
+        (branch_mypy, baseline["mypy"], "mypy"),
+        (branch_bandit, baseline["bandit"], "bandit"),
+    ):
+        a_blocks, a_advisories = _diff_errors(branch_c, base_c, label, rename_map, deleted)
+        blocks.extend(a_blocks)
+        advisories.extend(a_advisories)
 
-    def diff_errors(branch_c: Counter, base_c: Counter, label: str) -> None:
-        translated = _translate(base_c, rename_map, deleted)
-        # Per-file new errors
-        per_file_new: list[dict] = []
-        for (file, code), n in branch_c.items():
-            base_n = translated.get((file, code), 0)
-            if n > base_n:
-                per_file_new.append({"file": file, "code": code, "new": n - base_n})
-        # Global net per code: did the total count for this code rise?
-        global_branch: Counter = Counter()
-        for (file, code), n in branch_c.items():
-            global_branch[code] += n
-        global_base: Counter = Counter()
-        for (file, code), n in translated.items():
-            global_base[code] += n
-        hard: list[dict] = []
-        soft: list[dict] = []
-        for entry in per_file_new:
-            net = global_branch[entry["code"]] - global_base[entry["code"]]
-            entry["global_net"] = net
-            if net <= 0:
-                soft.append(entry)
-            else:
-                hard.append(entry)
-        if hard:
-            blocks.append({"check": f"A.{label}", "kind": "new_errors", "items": hard})
-        if soft:
-            advisories.append({"check": f"A.{label}", "kind": "relocated_errors", "items": soft})
-
-    diff_errors(branch_ruff, baseline_ruff, "ruff")
-    diff_errors(branch_mypy, baseline_mypy, "mypy")
-    diff_errors(branch_bandit, baseline_bandit, "bandit")
-
-    # --- Check B: suppression-count diff --------------------------------------
-
-    translated_supp = _translate(baseline_supp, rename_map, deleted)
+    # Check B: new suppressions
+    translated_supp = _translate(baseline["supp"], rename_map, deleted)
     new_supp: list[dict] = []
     for (file, directive), n in branch_supp.items():
         base_n = translated_supp.get((file, directive), 0)
@@ -495,39 +561,13 @@ def cmd_diff(args: argparse.Namespace) -> None:
     if new_supp:
         blocks.append({"check": "B", "kind": "new_suppressions", "items": new_supp})
 
-    # --- Check C: test deletions (advisory) -----------------------------------
-
+    # Check C: deleted test files (advisory)
     deleted_tests = sorted(f for f in deleted if f.startswith("tests/"))
     if deleted_tests:
         advisories.append({"check": "C", "kind": "test_deletions", "items": deleted_tests})
 
-    # --- Check D: pytest weakening --------------------------------------------
-
-    new_skips: list[dict] = []
-    for file, n in branch_pytest["skips"].items():
-        # Reverse-translate: find which baseline path maps to this branch path
-        base_n = 0
-        for bf, bn in baseline_pytest["skips"].items():
-            if rename_map.get(bf, bf) == file:
-                base_n = bn
-                break
-        if n > base_n:
-            new_skips.append({"file": file, "new": n - base_n})
-    if new_skips:
-        blocks.append({"check": "D.skips", "kind": "new_skip_markers", "items": new_skips})
-
-    lost_asserts: list[dict] = []
-    for bf, base_n in baseline_pytest["asserts"].items():
-        if bf in deleted:
-            continue
-        new_f = rename_map.get(bf, bf)
-        n = branch_pytest["asserts"].get(new_f, 0)
-        if n < base_n:
-            lost_asserts.append({"file": new_f, "lost": base_n - n})
-    if lost_asserts:
-        blocks.append({"check": "D.asserts", "kind": "lost_assertions", "items": lost_asserts})
-
-    # --- Verdict --------------------------------------------------------------
+    # Check D: pytest weakening (skips + lost asserts)
+    blocks.extend(_check_pytest_weakening(branch_pytest, baseline["pytest"], rename_map, deleted))
 
     if blocks:
         verdict = "fail"
@@ -538,18 +578,18 @@ def cmd_diff(args: argparse.Namespace) -> None:
 
     report = {
         "verdict": verdict,
-        "baseline_sha": baseline_sha,
+        "baseline_sha": baseline["sha"],
         "blocks": blocks,
         "advisories": advisories,
         "summary": {
             "ruff_branch": sum(branch_ruff.values()),
-            "ruff_baseline": sum(baseline_ruff.values()),
+            "ruff_baseline": sum(baseline["ruff"].values()),
             "mypy_branch": sum(branch_mypy.values()),
-            "mypy_baseline": sum(baseline_mypy.values()),
+            "mypy_baseline": sum(baseline["mypy"].values()),
             "bandit_branch": sum(branch_bandit.values()),
-            "bandit_baseline": sum(baseline_bandit.values()),
+            "bandit_baseline": sum(baseline["bandit"].values()),
             "suppressions_branch": sum(branch_supp.values()),
-            "suppressions_baseline": sum(baseline_supp.values()),
+            "suppressions_baseline": sum(baseline["supp"].values()),
         },
     }
     sys.stdout.write(json.dumps(report, indent=2) + "\n")
