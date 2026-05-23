@@ -1,0 +1,5 @@
+[order]
+description = "Periodic re-slinger for exhausted chain beads (pack #47 supervisor-side outer loop). The v2.18 claude-with-retry wrapper performs in-process retry (default 5 attempts via claude --resume) on Mode A (per-turn cap) and Mode B (529 overload) exits. When the in-process loop exhausts, the wrapper exits 75 with <template>.state=exhausted + <template>.exhausted_at on the bead. This watcher reacts to that state: for each bead at <template>.state=exhausted with exhausted_at older than SDLC_EXHAUSTED_BEAD_BACKOFF_MINUTES (default 30), re-slings the bead to the same pool, increments <template>.retry_count, and notifies. After SDLC_EXHAUSTED_BEAD_MAX_RETRIES (default 3) consecutive re-slings, gives up and notifies the operator with retry_count_exhausted state. Closes the hours-scale 529 storm gap without modifying the wrapper's minutes-scale retry behavior. Defaults OFF — enable via SDLC_EXHAUSTED_BEAD_RETRY_ENABLED=true."
+trigger = "cooldown"
+interval = "5m"
+exec = "$PACK_DIR/assets/scripts/sdlc-exhausted-bead-retry.sh"
