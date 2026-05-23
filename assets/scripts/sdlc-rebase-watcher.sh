@@ -26,14 +26,24 @@
 #   GC_RIG_ROOT         absolute path to the rig (when set by the supervisor)
 #
 # Tunable:
-#   SDLC_WATCHER_ENABLED  default "true". Set to "false" to disable the
-#                         autonomous trigger. The manual command
-#                         `gc sdlc-stories rebase <story_id>` still works.
+#   SDLC_REBASE_WATCHER_ENABLED  default "true". Set to "false" to disable
+#                                the autonomous trigger. The manual command
+#                                `gc sdlc-stories rebase <story_id>` still works.
+#                                Legacy name `SDLC_WATCHER_ENABLED` is still
+#                                honored for one release with a stderr warning;
+#                                will be removed in v2.30.
 
 set -euo pipefail
 
-# Feature gate — operator override
-if [ "${SDLC_WATCHER_ENABLED:-true}" != "true" ]; then
+# Feature gate — operator override.
+# v2.29.4: renamed SDLC_WATCHER_ENABLED → SDLC_REBASE_WATCHER_ENABLED to match
+# the SDLC_<SHORTNAME>_ENABLED convention used by the other detector scripts.
+# The legacy name is still read for one release with a deprecation warning.
+if [ -n "${SDLC_WATCHER_ENABLED:-}" ] && [ -z "${SDLC_REBASE_WATCHER_ENABLED:-}" ]; then
+    echo "sdlc-rebase-watcher: SDLC_WATCHER_ENABLED is deprecated; use SDLC_REBASE_WATCHER_ENABLED. Honoring legacy value for this release." >&2
+    SDLC_REBASE_WATCHER_ENABLED="$SDLC_WATCHER_ENABLED"
+fi
+if [ "${SDLC_REBASE_WATCHER_ENABLED:-true}" != "true" ]; then
     exit 0
 fi
 

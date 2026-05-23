@@ -93,7 +93,7 @@ def _rig_list_one(rig_root: str) -> str:
 
 def _setup_env(tmp: Path, gc_path: Path, bd_path: Path, gh_path: Path, py_path: Path) -> dict:
     """Build a test env that pins fakes on PATH and skips the SDLC enabled
-    gate (sweeper requires SDLC_WATCHER_ENABLED!=false; default is enabled)."""
+    gate (sweeper requires SDLC_SWEEPER_ENABLED!=false; default is enabled)."""
     return {
         **os.environ,
         "PATH": f"{tmp}:{os.environ.get('PATH', '')}",
