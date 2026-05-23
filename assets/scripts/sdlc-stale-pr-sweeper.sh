@@ -45,13 +45,14 @@ if [ -z "$CITY_ROOT" ] || [ ! -d "$CITY_ROOT" ]; then
     exit 0
 fi
 
-# Enumerate rigs via gc. Skip the HQ rig (city's own beads database; chain
-# stories don't live there) and any suspended rig.
-RIGS_JSON=$(cd "$CITY_ROOT" && gc rig list --json 2>/dev/null || echo "")
-if [ -z "$RIGS_JSON" ]; then
-    echo "sweeper: gc rig list returned nothing from $CITY_ROOT; cannot enumerate rigs" >&2
-    exit 0
-fi
+# Locate the shared rig-enumeration library, relative to this script.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RIG_LISTER="$SCRIPT_DIR/lib/sdlc-list-rigs.sh"
+
+# Resolve PACK_DIR for the stories.py rebase invocation later in this
+# file. The library captures rig metadata; this remains needed for the
+# bridge path.
+PACK_DIR="${PACK_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 # Per-rig scan. Walks the rig's closed chain beads with final_state=pr_open_for_human,
 # checks each PR's mergeable state, triggers rebase on stale.
@@ -168,17 +169,13 @@ sweep_rig() {
     done
 }
 
-# Loop over each non-HQ, non-suspended rig. Capture the filtered JSON first
-# rather than piping directly into the while loop: `set -euo pipefail` is in
-# effect, so a jq parse error on a malformed `gc rig list` payload would kill
-# the script through pipefail. The explicit capture lets `|| true` swallow
-# that case and continue with zero rigs.
-FILTERED_RIGS=$(echo "$RIGS_JSON" | jq -c '.rigs[] | select(.hq == false and .suspended == false)' 2>/dev/null || true)
-echo "$FILTERED_RIGS" | while IFS= read -r rig_json; do
-    [ -z "$rig_json" ] && continue
-    rig_name=$(echo "$rig_json" | jq -r '.name')
-    rig_path=$(echo "$rig_json" | jq -r '.path')
+# Loop over each non-HQ, non-suspended rig via the shared library. The
+# library tolerates malformed gc output (emits nothing) and an absent
+# city root (logs + emits nothing), so this loop is safe under
+# `set -euo pipefail`.
+while IFS=$'\t' read -r rig_name rig_path; do
+    [ -z "$rig_name" ] && continue
     sweep_rig "$rig_name" "$rig_path"
-done
+done < <(bash "$RIG_LISTER" "$CITY_ROOT")
 
 exit 0

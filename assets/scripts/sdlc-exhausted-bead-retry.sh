@@ -52,11 +52,11 @@ BACKOFF_MINUTES="${SDLC_EXHAUSTED_BEAD_BACKOFF_MINUTES:-30}"
 MAX_RETRIES="${SDLC_EXHAUSTED_BEAD_MAX_RETRIES:-3}"
 NOTIFY="$PACK_DIR/assets/scripts/sdlc-notify.sh"
 
-RIGS_JSON=$(cd "$CITY_ROOT" && gc rig list --json 2>/dev/null || echo "")
-if [ -z "$RIGS_JSON" ]; then
-    echo "exhausted-bead-retry: gc rig list returned nothing" >&2
-    exit 0
-fi
+# Locate the shared rig-enumeration library relative to this script.
+# Tests override PACK_DIR to point at a fake pack root; the library
+# always ships next to this script so prefer the script-relative path.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RIG_LISTER="$SCRIPT_DIR/lib/sdlc-list-rigs.sh"
 
 # Per-rig: walk closed AND open beads with any <template>.state=exhausted
 # field. A bead's state could be open (worker died mid-step; supervisor
@@ -212,12 +212,9 @@ PYEOF
     fi
 }
 
-FILTERED_RIGS=$(echo "$RIGS_JSON" | jq -c '.rigs[] | select(.hq == false and .suspended == false)' 2>/dev/null || true)
-echo "$FILTERED_RIGS" | while IFS= read -r rig_json; do
-    [ -z "$rig_json" ] && continue
-    rig_name=$(echo "$rig_json" | jq -r '.name')
-    rig_path=$(echo "$rig_json" | jq -r '.path')
+while IFS=$'\t' read -r rig_name rig_path; do
+    [ -z "$rig_name" ] && continue
     reconcile_rig "$rig_name" "$rig_path"
-done
+done < <(bash "$RIG_LISTER" "$CITY_ROOT")
 
 exit 0
