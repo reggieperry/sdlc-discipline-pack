@@ -19,7 +19,8 @@
 #   - status: in VALID_STATUSES = {draft, ready, filed, in-flight, merged, closed}
 #   - story_id, title, status frontmatter fields present
 #   - dependency story_ids resolve
-#   - sensitive_files entries match the rig's architecture.toml
+#   - sensitive_files entries match the rig's .claude/rules/project/sensitive-files.md
+#     (NOT architecture.toml — that's a separate, opt-in tech-debt-automation config)
 #
 # Closes pack issue #90.
 
