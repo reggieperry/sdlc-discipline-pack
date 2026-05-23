@@ -437,6 +437,12 @@ def build_graph_plan(
                     # stories). Each name maps to a script at
                     # $RIG_PACK/assets/scripts/sdlc-rule-checks/<name>.py.
                     "self_audit_rules": ",".join(s.get("self_audit_rules") or []),
+                    # pack #124: path to the upstream audit document this spec
+                    # was derived from. Reviewer reads it to cross-check that
+                    # the spec's In: list covers every named identifier the
+                    # audit flagged. Empty string when the spec was not derived
+                    # from an audit doc (the common case).
+                    "source_audit_doc": s.get("source_audit_doc") or "",
                 },
             }
         )

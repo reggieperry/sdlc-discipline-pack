@@ -125,6 +125,28 @@ For each `- [ ]` item in the plan's "Acceptance criteria" section, find the test
 
 If any criterion is `partial` or `unaddressed`, the review **fails**.
 
+### Audit-doc coverage cross-check (v2.30, issue #124)
+
+If the bead carries `metadata.source_audit_doc`, the spec was filed from an upstream audit document. The reviewer's spec-coverage check is not enough on its own — the spec itself may have under-scoped the audit's findings, in which case the worker faithfully addresses everything the spec asked for, but the audit's actual scope is wider. This is the scope-narrowing failure mode the Session 1 deep-reasoning evaluation caught against v2.29.3 (the audit named 6 sites; the spec covered 4; the migration declared closure).
+
+```bash
+AUDIT_DOC=$(bd show $STORY_ID --json | jq -r '.[0].metadata.source_audit_doc // ""')
+if [ -n "$AUDIT_DOC" ] && [ -f "$AUDIT_DOC" ]; then
+  echo "reviewer: cross-checking spec coverage against audit doc at $AUDIT_DOC"
+  # Read the audit doc and enumerate named identifiers (file paths, function names,
+  # line ranges) the audit flagged in the area the spec claims to address.
+fi
+```
+
+For each named identifier in the audit's findings:
+
+- If the identifier appears in the spec's `**In:**` list (or in a documented `**Out:**` reason naming why it's excluded), the spec covers it.
+- If the identifier appears NOWHERE in the spec's scope sections, the spec under-scoped the audit.
+
+If ANY identifier is missing from both `**In:**` and `**Out:**`, raise a `partial_spec_coverage` finding listing each uncovered identifier. The review **fails** on this finding — the spec needs amendment before the worker can close the audit's findings cleanly.
+
+When `metadata.source_audit_doc` is unset, skip this section entirely. The cross-check is opt-in via operator discipline at spec-filing time.
+
 ### Code quality (against project rules)
 
 The auto-loaded rules in `.claude/rules/` define the standards. As you read the diff, the relevant rules will fire on the files you open. Particular self-audits to apply at this stage:
