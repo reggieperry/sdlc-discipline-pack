@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
-import textwrap
 import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from _spies import spy_gc_with_session_dispatch, spy_recorder
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-alive-idle-detector.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-alive-idle-detector.sh not found at {SCRIPT_PATH}"
@@ -89,82 +89,6 @@ PANE_AT_PROMPT_NO_FOOTER = """\
 ────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents ◈ max · /effort
 """
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_gc(
-    tmp: Path,
-    *,
-    bd_list_json: str = "[]",
-    session_list_json: str = "[]",
-    peek_output: str = "",
-    submit_exit: int = 0,
-) -> Path:
-    """Build a fake `gc` binary that dispatches on subcommand and records argv.
-
-    Recorded:
-    - argv → <tmp>/gc-argv.log (one line per invocation)
-    - sequenced calls → <tmp>/call-sequence.log
-
-    Dispatch:
-    - `gc bd list --status=in_progress --json` → echoes bd_list_json
-    - `gc session list --json` → echoes session_list_json
-    - `gc session peek <target> --lines N` → echoes peek_output
-    - `gc session submit <id> "continue" --intent default` → exits submit_exit
-    - everything else → exits 0
-    """
-    path = tmp / "gc"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/gc-argv.log"
-        echo "gc $@" >> "{tmp}/call-sequence.log"
-        if [ "$1" = "bd" ] && [ "$2" = "list" ]; then
-            cat <<'__BD_EOF__'
-{bd_list_json}
-__BD_EOF__
-            exit 0
-        fi
-        if [ "$1" = "session" ] && [ "$2" = "list" ]; then
-            cat <<'__SL_EOF__'
-{session_list_json}
-__SL_EOF__
-            exit 0
-        fi
-        if [ "$1" = "session" ] && [ "$2" = "peek" ]; then
-            cat <<'__PEEK_EOF__'
-{peek_output}
-__PEEK_EOF__
-            exit 0
-        fi
-        if [ "$1" = "session" ] && [ "$2" = "submit" ]; then
-            exit {submit_exit}
-        fi
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
-def _fake_recorder(tmp: Path, name: str, *, exit_code: int = 0) -> Path:
-    """Build a fake binary that records argv and exits."""
-    path = tmp / name
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/{name}-argv.log"
-        echo "{name} $@" >> "{tmp}/call-sequence.log"
-        cat >> "{tmp}/{name}-stdin.log" 2>/dev/null || true
-        exit {exit_code}
-        """
-    )
-    _write_executable(path, body)
-    return path
 
 
 def _bead(
@@ -243,8 +167,10 @@ class FeatureGateTests(unittest.TestCase):
     def test_exits_zero_when_enabled_env_unset(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            gc = _fake_gc(tmp, bd_list_json=json.dumps([_bead()]), peek_output=PANE_AT_PROMPT_IDLE)
-            notify = _fake_recorder(tmp, "sdlc-notify.sh")
+            gc = spy_gc_with_session_dispatch(
+                tmp, bd_list_json=json.dumps([_bead()]), peek_output=PANE_AT_PROMPT_IDLE
+            )
+            notify = spy_recorder(tmp, "sdlc-notify.sh")
 
             env = _base_env(tmp, gc, notify)
             env.pop("SDLC_ALIVE_IDLE_DETECTOR_ENABLED", None)
@@ -270,8 +196,10 @@ class FeatureGateTests(unittest.TestCase):
     def test_exits_zero_when_enabled_env_is_false(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            gc = _fake_gc(tmp, bd_list_json=json.dumps([_bead()]), peek_output=PANE_AT_PROMPT_IDLE)
-            notify = _fake_recorder(tmp, "sdlc-notify.sh")
+            gc = spy_gc_with_session_dispatch(
+                tmp, bd_list_json=json.dumps([_bead()]), peek_output=PANE_AT_PROMPT_IDLE
+            )
+            notify = spy_recorder(tmp, "sdlc-notify.sh")
 
             env = _base_env(tmp, gc, notify)
             env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "false"
@@ -301,13 +229,13 @@ class DetectionTests(unittest.TestCase):
         threshold_minutes: int = 20,
     ) -> tuple[subprocess.CompletedProcess, Path]:
         tmp = Path(self._tmp_str)
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps(bead_list),
             session_list_json=json.dumps(session_list),
             peek_output=pane,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
 
         bead_id = bead_list[0]["id"] if bead_list else "el-test"
         events = _events_file(tmp, bead_id=bead_id, last_update_seconds_ago=events_age_seconds)
@@ -401,13 +329,13 @@ class ActionTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-stuck")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -456,14 +384,14 @@ class ActionTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-stuck")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
             submit_exit=1,  # the submit fails
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -498,13 +426,13 @@ class RateLimitTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-recent")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-recent", last_update_seconds_ago=1800)
 
         # Pre-populate the state file: we nudged this bead 60s ago.
@@ -536,13 +464,13 @@ class RateLimitTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-stale")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps([session]),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stale", last_update_seconds_ago=1800)
 
         state_dir = tmp / "state"
@@ -597,13 +525,13 @@ class RealGcShapeTests(unittest.TestCase):
             "sessions": [session],
             "summary": {"total": 1, "active": 1, "suspended": 0, "closed": 0},
         }
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps(session_envelope),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-stuck", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -631,13 +559,13 @@ class RealGcShapeTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-menu")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
             peek_output=PANE_INTERACTIVE_MENU,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-menu", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -662,13 +590,13 @@ class RealGcShapeTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-nofooter")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
             peek_output=PANE_AT_PROMPT_NO_FOOTER,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-nofooter", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -703,13 +631,13 @@ class RealGcShapeTests(unittest.TestCase):
             session_id="bl-d5vmvea",
             session_name="sdlc-discipline__worker-bl-d5vmvea",
         )
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-prod", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -745,10 +673,10 @@ class ObservabilityTests(unittest.TestCase):
     def test_empty_run_emits_summary_line(self) -> None:
         """Even with no beads, the detector emits its decision summary."""
         tmp = Path(self._tmp_str)
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp, bd_list_json="[]", session_list_json="[]", peek_output=PANE_AT_PROMPT_IDLE
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
 
         env = _base_env(tmp, gc, notify)
         env["SDLC_ALIVE_IDLE_DETECTOR_ENABLED"] = "true"
@@ -773,13 +701,13 @@ class ObservabilityTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-trip")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-trip", last_update_seconds_ago=1800)
 
         env = _base_env(tmp, gc, notify)
@@ -815,13 +743,13 @@ class DailyRateLimitTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-overlimit")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-overlimit", last_update_seconds_ago=1800)
 
         # Pre-populate state with 5 recent nudge timestamps (within 24h).
@@ -865,13 +793,13 @@ class DailyRateLimitTests(unittest.TestCase):
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-belowlimit")
         session = _session(session_id="sdlc-discipline__worker-bl-test")
-        gc = _fake_gc(
+        gc = spy_gc_with_session_dispatch(
             tmp,
             bd_list_json=json.dumps([bead]),
             session_list_json=json.dumps({"sessions": [session]}),
             peek_output=PANE_AT_PROMPT_IDLE,
         )
-        notify = _fake_recorder(tmp, "sdlc-notify.sh")
+        notify = spy_recorder(tmp, "sdlc-notify.sh")
         events = _events_file(tmp, bead_id="el-belowlimit", last_update_seconds_ago=1800)
 
         state_dir = tmp / "state"
