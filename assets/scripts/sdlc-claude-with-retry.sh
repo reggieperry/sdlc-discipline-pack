@@ -145,9 +145,17 @@ while true; do
             ;;
         EXIT_EXHAUSTED*)
             CAUSE=$(echo "$RESULT" | awk '{print $2}')
+            # exhausted_at: enables the supervisor-side
+            # exhausted-bead-retry watcher (pack #47) to compute
+            # "minutes since exhaustion" and decide when to re-sling
+            # the bead for a fresh wrapper-loop attempt. Without
+            # this timestamp the watcher can't distinguish a bead
+            # that exhausted 30 seconds ago from one that exhausted
+            # an hour ago.
             write_metadata \
                 --set-metadata "${SDLC_TEMPLATE}.state=exhausted" \
-                --set-metadata "${SDLC_TEMPLATE}.last_exit_cause=${CAUSE}"
+                --set-metadata "${SDLC_TEMPLATE}.last_exit_cause=${CAUSE}" \
+                --set-metadata "${SDLC_TEMPLATE}.exhausted_at=$(date -Iseconds)"
             exit 75
             ;;
         RETRY*)
