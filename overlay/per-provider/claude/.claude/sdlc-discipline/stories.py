@@ -767,9 +767,9 @@ def main() -> int:
             "block. Do NOT in-place edit the frontmatter to status: shipped or\n"
             "status: done — those are not in VALID_STATUSES (stories.py:58) and\n"
             "the validator + pre-commit hook (pack #90) will reject them.\n\n"
-            "The finalizer agent should run this step automatically on the\n"
-            "glance_merge tier (see pack issue A); operators run it manually\n"
-            "for human_required or review_encouraged tiers after merge."
+            "Today this is operator-invoked: run `stories.py archive` after\n"
+            "a chain's PR merges. Future pack work may wire the finalizer to\n"
+            "call this automatically on glance_merge."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
