@@ -32,8 +32,9 @@ this one. `write_executable` now lives here directly (no re-export
 hop); `_fake_msmtp` was renamed `spy_msmtp` per Meszaros's Test Spy
 vocabulary. Spy factories use the `spy_` prefix; `write_executable` is
 the lone non-spy utility re-exported for cross-file use. The module's
-own filename (`_spies.py`) carries the underscore that keeps unittest
-discovery from treating the file itself as a test case.
+filename (`_spies.py`) does not match unittest's default `test*.py`
+discovery pattern, so the file itself is not collected as a test case
+even though it sits alongside the test files.
 
 Justified aggregate (modularity.md item 11). The module exports more
 than 7 public names — currently 13 spy factories plus the
