@@ -19,58 +19,15 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import stat
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _spies import spy_bd_list, spy_gc_rig_list, spy_notify
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-exhausted-bead-retry.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-exhausted-bead-retry.sh not found at {SCRIPT_PATH}"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_gc(fakes_dir: Path, rig_list_json: str) -> None:
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/gc-argv.log"\n'
-        'if [ "$1" = "rig" ] && [ "$2" = "list" ]; then\n'
-        "    cat <<'__GC_EOF__'\n"
-        f"{rig_list_json}\n"
-        "__GC_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "gc", body)
-
-
-def _fake_bd(fakes_dir: Path, list_response: str = "[]") -> None:
-    """Fake bd: returns list_response for `bd list ...`; logs `bd update ...` argv."""
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/bd-argv.log"\n'
-        'if [ "$1" = "-C" ]; then shift 2; fi\n'
-        'if [ "$1" = "list" ]; then\n'
-        "    cat <<'__BD_LIST_EOF__'\n"
-        f"{list_response}\n"
-        "__BD_LIST_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "bd", body)
-
-
-def _fake_notify(fakes_dir: Path) -> None:
-    body = f'#!/bin/bash\necho "$@" >> "{fakes_dir}/notify-argv.log"\nexit 0\n'
-    pack_assets_scripts = fakes_dir / "fake-pack" / "assets" / "scripts"
-    pack_assets_scripts.mkdir(parents=True, exist_ok=True)
-    _write_executable(pack_assets_scripts / "sdlc-notify.sh", body)
 
 
 def _setup_rig(tmp: Path, rig_name: str = "test-rig") -> tuple[Path, Path, Path]:
@@ -145,11 +102,11 @@ class FeatureGateTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(
                 fakes_dir, list_response=json.dumps([_bead("el-1", "worker", _iso_now_offset(60))])
             )
-            _fake_notify(fakes_dir)
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root, enabled=False)
 
@@ -165,9 +122,9 @@ class RetryDecisionTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response="[]")
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response="[]")
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -181,9 +138,9 @@ class RetryDecisionTests(unittest.TestCase):
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             # exhausted 5 min ago, backoff is 30 min → too recent.
             beads = json.dumps([_bead("el-1", "worker", _iso_now_offset(5))])
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads)
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root, backoff_minutes=30)
 
@@ -196,9 +153,9 @@ class RetryDecisionTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             beads = json.dumps([_bead("el-1", "worker", _iso_now_offset(60))])
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads)
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root, backoff_minutes=30)
 
@@ -215,9 +172,9 @@ class RetryDecisionTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             beads = json.dumps([_bead("el-1", "worker", _iso_now_offset(60), retry_count=3)])
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads)
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root, backoff_minutes=30, max_retries=3)
 
@@ -234,9 +191,9 @@ class RetryDecisionTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             beads = json.dumps([_bead("el-1", "worker", exhausted_at=None)])
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads)
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -257,9 +214,9 @@ class MultiBeadTests(unittest.TestCase):
                     _bead("el-too-recent", "reviewer", _iso_now_offset(5)),
                 ]
             )
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads)
+            spy_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root, backoff_minutes=30, max_retries=3)
 

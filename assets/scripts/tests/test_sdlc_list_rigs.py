@@ -25,35 +25,15 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _spies import spy_gc_rig_list
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "lib" / "sdlc-list-rigs.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-list-rigs.sh not found at {SCRIPT_PATH}"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_gc(fakes_dir: Path, rig_list_json: str) -> None:
-    """Fake `gc` that emits rig_list_json on `gc rig list --json`."""
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/gc-argv.log"\n'
-        'if [ "$1" = "rig" ] && [ "$2" = "list" ]; then\n'
-        "    cat <<'__GC_EOF__'\n"
-        f"{rig_list_json}\n"
-        "__GC_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "gc", body)
 
 
 def _invoke(fakes_dir: Path, city_root: Path) -> subprocess.CompletedProcess:
@@ -107,7 +87,7 @@ class FilterShapeTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
             rigs_json = json.dumps({"rigs": [_rig("hq-rig", "/p/hq", hq=True)]})
-            _fake_gc(fakes_dir, rigs_json)
+            spy_gc_rig_list(fakes_dir, rigs_json)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -125,7 +105,7 @@ class FilterShapeTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
             rigs_json = json.dumps({"rigs": [_rig("hq-rig", "/p/hq", hq=None, is_hq=True)]})
-            _fake_gc(fakes_dir, rigs_json)
+            spy_gc_rig_list(fakes_dir, rigs_json)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -144,7 +124,7 @@ class FilterShapeTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
             rigs_json = json.dumps({"rigs": [_rig("legacy-rig", "/p/legacy", hq=None)]})
-            _fake_gc(fakes_dir, rigs_json)
+            spy_gc_rig_list(fakes_dir, rigs_json)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -162,7 +142,7 @@ class SuspendedFilterTests(unittest.TestCase):
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
             rigs_json = json.dumps({"rigs": [_rig("sleepy", "/p/sleepy", suspended=True)]})
-            _fake_gc(fakes_dir, rigs_json)
+            spy_gc_rig_list(fakes_dir, rigs_json)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -185,7 +165,7 @@ class MixedRigTests(unittest.TestCase):
                     ]
                 }
             )
-            _fake_gc(fakes_dir, rigs_json)
+            spy_gc_rig_list(fakes_dir, rigs_json)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -203,7 +183,7 @@ class ResilienceTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
-            _fake_gc(fakes_dir, '{"rigs": []}')
+            spy_gc_rig_list(fakes_dir, '{"rigs": []}')
 
             env = {
                 **os.environ,
@@ -229,7 +209,7 @@ class ResilienceTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             _, fakes_dir = _setup(tmp)
-            _fake_gc(fakes_dir, '{"rigs": []}')
+            spy_gc_rig_list(fakes_dir, '{"rigs": []}')
 
             result = _invoke(fakes_dir, tmp / "does-not-exist")
 
@@ -241,7 +221,7 @@ class ResilienceTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
-            _fake_gc(fakes_dir, "not json {")
+            spy_gc_rig_list(fakes_dir, "not json {")
 
             result = _invoke(fakes_dir, city_root)
 
@@ -252,7 +232,7 @@ class ResilienceTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, fakes_dir = _setup(tmp)
-            _fake_gc(fakes_dir, '{"rigs": []}')
+            spy_gc_rig_list(fakes_dir, '{"rigs": []}')
 
             result = _invoke(fakes_dir, city_root)
 
