@@ -157,6 +157,44 @@ PROTOCOL_METHOD_ADDED = textwrap.dedent(
     """
 )
 
+# Same method, sync → async. The args and return annotation are identical;
+# the only delta is `def → async def`. Empirical case: Elder PR #220
+# (EL-078) — `CheckpointStore.save` on a protocol_modules-listed file.
+PROTOCOL_SYNC_TO_ASYNC = textwrap.dedent(
+    """\
+    from typing import Protocol, runtime_checkable
+
+    @runtime_checkable
+    class Agent(Protocol):
+        async def run(self, x: int) -> str: ...
+    """
+)
+
+# Method stays async with identical signature — no Signal B fire.
+# Comment changes between baseline and head so the commit is non-empty
+# while the Protocol signature is unchanged.
+PROTOCOL_ASYNC_BASELINE = textwrap.dedent(
+    """\
+    # async-protocol baseline (rev a)
+    from typing import Protocol, runtime_checkable
+
+    @runtime_checkable
+    class Agent(Protocol):
+        async def run(self, x: int) -> str: ...
+    """
+)
+
+PROTOCOL_ASYNC_HEAD_NO_SIG_CHANGE = textwrap.dedent(
+    """\
+    # async-protocol baseline (rev b — comment-only edit, no sig change)
+    from typing import Protocol, runtime_checkable
+
+    @runtime_checkable
+    class Agent(Protocol):
+        async def run(self, x: int) -> str: ...
+    """
+)
+
 
 class SignalB(unittest.TestCase):
     def test_fires_on_signature_change(self) -> None:
@@ -172,6 +210,31 @@ class SignalB(unittest.TestCase):
         repo = make_repo()
         baseline = commit(repo, {"core/agent.py": PROTOCOL_BASELINE}, "baseline")
         head = commit(repo, {"core/agent.py": PROTOCOL_METHOD_ADDED}, "edit")
+        cfg = write_rig_config(repo, protocol_modules=["core/agent.py"])
+        result = run_script(repo, baseline, head, cfg)
+        self.assertNotIn("B", result["signals"])
+
+    def test_fires_on_sync_to_async_change(self) -> None:
+        """def → async def on a Protocol method must fire Signal B.
+
+        Args and return annotation are identical; only the function kind
+        changes. The signature identity must include the kind to catch
+        this — without it (pre-fix), Signal B silently passed and the
+        recommendation undercounted Protocol ripples.
+        """
+        repo = make_repo()
+        baseline = commit(repo, {"core/agent.py": PROTOCOL_BASELINE}, "baseline")
+        head = commit(repo, {"core/agent.py": PROTOCOL_SYNC_TO_ASYNC}, "edit")
+        cfg = write_rig_config(repo, protocol_modules=["core/agent.py"])
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("B", result["signals"])
+        self.assertEqual(result["recommendation"], "human_required")
+
+    def test_does_not_fire_on_async_to_async_identical(self) -> None:
+        """Async Protocol method with identical signature must NOT fire."""
+        repo = make_repo()
+        baseline = commit(repo, {"core/agent.py": PROTOCOL_ASYNC_BASELINE}, "baseline")
+        head = commit(repo, {"core/agent.py": PROTOCOL_ASYNC_HEAD_NO_SIG_CHANGE}, "comment edit")
         cfg = write_rig_config(repo, protocol_modules=["core/agent.py"])
         result = run_script(repo, baseline, head, cfg)
         self.assertNotIn("B", result["signals"])

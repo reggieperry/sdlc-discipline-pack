@@ -239,7 +239,16 @@ def _is_frozen_dataclass(node: ast.ClassDef) -> bool:
 
 
 def protocol_signatures_by_class(mod: ast.Module) -> dict[str, dict[str, str]]:
-    """Map class-name → {method_name: signature-string} for ``@runtime_checkable Protocol`` classes."""
+    """Map class-name → {method_name: signature-string} for ``@runtime_checkable Protocol`` classes.
+
+    The signature string includes the function kind (``async`` prefix) when
+    applicable. ``ast.FunctionDef`` and ``ast.AsyncFunctionDef`` carry the
+    sync/async distinction in the node TYPE, not in ``args`` — without the
+    explicit prefix, ``def → async def`` round-trips identically and Signal
+    B misses the change. Empirical case: Elder PR #220 (EL-078) flipped
+    ``CheckpointStore.save`` from sync to async on a ``protocol_modules``-
+    listed file; the gate should have routed ``human_required`` and did not.
+    """
 
     out: dict[str, dict[str, str]] = {}
     for node in mod.body:
@@ -250,8 +259,12 @@ def protocol_signatures_by_class(mod: ast.Module) -> dict[str, dict[str, str]]:
         methods: dict[str, str] = {}
         for n in node.body:
             if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef):
+                kind_prefix = "async " if isinstance(n, ast.AsyncFunctionDef) else ""
                 methods[n.name] = (
-                    ast.unparse(n.args) + " -> " + (ast.unparse(n.returns) if n.returns else "None")
+                    kind_prefix
+                    + ast.unparse(n.args)
+                    + " -> "
+                    + (ast.unparse(n.returns) if n.returns else "None")
                 )
         out[node.name] = methods
     return out
