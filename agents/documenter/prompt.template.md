@@ -154,11 +154,43 @@ fi
 
 ## When you're done — commit, push, route
 
+**Scope discipline (pack #83):** commit ONLY the documenter's two outputs — `docs/features/feature-${STORY_ID}-*.md` and `.claude/conditional_docs/feature-${STORY_ID}-*.md`. The chain reviewer already passed (its commit predates yours), so no other phase will audit what you ship. Empirically (EL-124 / PR reggieperry/elder_trading_system#396): a previous documenter shipped a clean feature doc and silently deleted 11 unrelated story specs in the same commit. Don't.
+
+Two-step gate: (1) stage exactly the two output paths scoped to this story-id, then (2) refuse to commit if `git status --porcelain` shows any other modified, deleted, or untracked file. Surface the unexpected change to the operator via bead metadata + drain-ack-exit; never absorb it into the documenter's commit.
+
 ```bash
 SLUG=$(bd show $STORY_ID --json | jq -r '.[0].title' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')
 FEATURE_DOC="docs/features/feature-${STORY_ID}-${SLUG}.md"
 
-git add docs/features/feature-*.md .claude/conditional_docs/feature-*.md 2>/dev/null || true
+# Stage the documenter's two outputs scoped to THIS story-id only — no globs
+# that could pick up sibling-story or unrelated files.
+git add "docs/features/feature-${STORY_ID}-"*.md ".claude/conditional_docs/feature-${STORY_ID}-"*.md 2>/dev/null || true
+
+# Refuse to commit if anything else is in the working tree. The expected
+# unstaged set after the explicit-path add above is empty; non-empty
+# porcelain output means changes the documenter did not intend or that
+# leaked from a prior phase. Surface and bail rather than commit them.
+UNEXPECTED=$(git status --porcelain | grep -v "^[AM]  docs/features/feature-${STORY_ID}-" | grep -v "^[AM]  .claude/conditional_docs/feature-${STORY_ID}-" || true)
+if [ -n "$UNEXPECTED" ]; then
+    bd update $STORY_ID \
+      --set-metadata documenter.scope_drift_detected="true" \
+      --set-metadata documenter.scope_drift_files="$(echo "$UNEXPECTED" | head -20 | tr '\n' ';')"
+    bd close $STORY_ID --reason "documenter detected scope-drift in worktree; refused to commit. See documenter.scope_drift_files."
+    cat <<EOF >&2
+documenter: SCOPE DRIFT — worktree contains changes outside the documenter's allowlist
+(docs/features/feature-${STORY_ID}-*.md, .claude/conditional_docs/feature-${STORY_ID}-*.md).
+Refusing to commit. Files:
+$UNEXPECTED
+
+Operator must inspect the worktree (the worker / tester / reviewer / documenter
+phase that introduced these changes), then either: (a) revert the unexpected
+changes and re-sling the bead from documenter; (b) accept the changes
+deliberately as part of a re-slung worker phase that re-validates them.
+EOF
+    gc runtime drain-ack
+    exit
+fi
+
 if ! git diff --cached --quiet; then
     git commit -m "docs: feature-${STORY_ID} — $(bd show $STORY_ID --json | jq -r '.[0].title' | head -c 60)"
     if git remote get-url origin >/dev/null 2>&1; then
