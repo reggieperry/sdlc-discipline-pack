@@ -33,149 +33,20 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
-import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _spies import (
+    spy_bd_dispatch,
+    spy_gc_rig_list,
+    spy_gh_pr_view,
+    spy_python3_stories_passthrough,
+)
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-stale-pr-sweeper.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-stale-pr-sweeper.sh not found at {SCRIPT_PATH}"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _fake_gc(tmp: Path, rig_list_json: str) -> Path:
-    """Build a fake ``gc`` that returns rig_list_json for ``gc rig list --json``."""
-    path = tmp / "gc"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/gc-argv.log"
-        if [ "$1" = "rig" ] && [ "$2" = "list" ]; then
-            cat <<'__GC_EOF__'
-{rig_list_json}
-__GC_EOF__
-            exit 0
-        fi
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
-def _fake_bd(tmp: Path, bead_responses: dict[str, str]) -> Path:
-    """Fake ``bd`` that returns canned responses for ``bd list`` and ``bd show``.
-
-    ``bead_responses`` maps:
-      "list"      -> JSON string for ``bd list --json``
-      "<bead_id>" -> JSON string for ``bd show <bead_id> --json``
-    """
-    path = tmp / "bd"
-    list_response = bead_responses.get("list", "[]")
-    # Build the bd show dispatch as a case statement.
-    show_cases: list[str] = []
-    for bead_id, json_body in bead_responses.items():
-        if bead_id == "list":
-            continue
-        show_cases.append(
-            f"""    {bead_id})
-        cat <<'__BD_SHOW_EOF__'
-{json_body}
-__BD_SHOW_EOF__
-        ;;"""
-        )
-    show_block = "\n".join(show_cases) if show_cases else "    *) echo '[]' ;;"
-
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/bd-argv.log"
-        # Strip -C <dir> prefix if present.
-        if [ "$1" = "-C" ]; then shift 2; fi
-        if [ "$1" = "list" ]; then
-            cat <<'__BD_LIST_EOF__'
-{list_response}
-__BD_LIST_EOF__
-            exit 0
-        fi
-        if [ "$1" = "show" ]; then
-            case "$2" in
-{show_block}
-                *) echo '[]' ;;
-            esac
-            exit 0
-        fi
-        if [ "$1" = "update" ]; then
-            # Record the update call; exit 0.
-            exit 0
-        fi
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
-def _fake_gh(tmp: Path, pr_responses: dict[int, str]) -> Path:
-    """Fake ``gh`` that returns canned responses for ``gh pr view <N>``."""
-    path = tmp / "gh"
-    cases: list[str] = []
-    for pr_num, json_body in pr_responses.items():
-        cases.append(
-            f"""    {pr_num})
-        cat <<'__GH_PR_EOF__'
-{json_body}
-__GH_PR_EOF__
-        ;;"""
-        )
-    case_block = "\n".join(cases) if cases else "    *) echo '{}' ;;"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/gh-argv.log"
-        if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-            case "$3" in
-{case_block}
-                *) echo '{{}}' ;;
-            esac
-            exit 0
-        fi
-        exit 0
-        """
-    )
-    _write_executable(path, body)
-    return path
-
-
-def _fake_python3_stories(tmp: Path) -> Path:
-    """Fake the ``python3 <bridge>/stories.py rebase <id>`` invocation by
-    recording argv via a python3 shim. The sweeper calls python3 directly
-    so we replace python3 on PATH; legitimate python3 needs delegated to
-    /usr/bin/python3 for unrelated invocations (none in the sweeper path
-    today, but keep the fallback)."""
-    path = tmp / "python3"
-    body = textwrap.dedent(
-        f"""\
-        #!/bin/bash
-        echo "$@" >> "{tmp}/python3-argv.log"
-        # If the first non-flag arg looks like a stories.py path, fake-succeed.
-        for arg in "$@"; do
-            case "$arg" in
-                *stories.py) exit 0 ;;
-            esac
-        done
-        # Fallback: dispatch to the real python3 for anything else.
-        exec /usr/bin/python3 "$@"
-        """
-    )
-    _write_executable(path, body)
-    return path
 
 
 def _bead_json(
@@ -270,8 +141,10 @@ class SweeperReconciliationTests(unittest.TestCase):
         rigs_json: str | None = None,
     ) -> subprocess.CompletedProcess:
         rig_root = str(self._tmp / "rig")
-        gc = _fake_gc(self._tmp, rigs_json if rigs_json is not None else _rig_list_one(rig_root))
-        bd = _fake_bd(
+        gc = spy_gc_rig_list(
+            self._tmp, rigs_json if rigs_json is not None else _rig_list_one(rig_root)
+        )
+        bd = spy_bd_dispatch(
             self._tmp,
             {
                 "list": _bead_list(
@@ -286,8 +159,8 @@ class SweeperReconciliationTests(unittest.TestCase):
         if merged_at is not None or merge_sha is not None:
             pr_payload["mergedAt"] = merged_at or ""
             pr_payload["mergeCommit"] = {"oid": merge_sha or ""}
-        gh = _fake_gh(self._tmp, {pr_number: json.dumps(pr_payload)})
-        py = _fake_python3_stories(self._tmp)
+        gh = spy_gh_pr_view(self._tmp, {pr_number: json.dumps(pr_payload)})
+        py = spy_python3_stories_passthrough(self._tmp)
 
         env = _setup_env(self._tmp, gc, bd, gh, py)
         return subprocess.run(

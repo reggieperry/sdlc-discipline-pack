@@ -18,12 +18,19 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from _spies import (
+    spy_bd_list,
+    spy_gc_rig_list,
+    spy_gh_pr_list,
+    spy_notify,
+    spy_python3_stories_archive,
+)
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-zombie-reconciler.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-zombie-reconciler.sh not found at {SCRIPT_PATH}"
@@ -32,90 +39,17 @@ STORIES_PY = PACK_ROOT / "overlay/per-provider/claude/.claude/sdlc-discipline/st
 assert STORIES_PY.exists(), f"stories.py not found at {STORIES_PY}"
 
 
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+def _setup_fake_pack_with_notify(fakes_dir: Path) -> None:
+    """Build the fake-pack bridge layout the reconciler walks at runtime.
 
-
-def _fake_gc(fakes_dir: Path, rig_list_json: str) -> None:
-    """Fake gc that returns rig_list_json for `gc rig list --json`."""
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/gc-argv.log"\n'
-        'if [ "$1" = "rig" ] && [ "$2" = "list" ]; then\n'
-        "    cat <<'__GC_EOF__'\n"
-        f"{rig_list_json}\n"
-        "__GC_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "gc", body)
-
-
-def _fake_bd(fakes_dir: Path, list_response: str = "[]") -> None:
-    """Fake bd that returns list_response for `bd list ... --json`."""
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/bd-argv.log"\n'
-        'if [ "$1" = "-C" ]; then shift 2; fi\n'
-        'if [ "$1" = "list" ]; then\n'
-        "    cat <<'__BD_LIST_EOF__'\n"
-        f"{list_response}\n"
-        "__BD_LIST_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "bd", body)
-
-
-def _fake_gh(fakes_dir: Path, pr_list_response: str = "[]") -> None:
-    """Fake gh that returns pr_list_response for `gh pr list ... --json`."""
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{fakes_dir}/gh-argv.log"\n'
-        'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then\n'
-        "    cat <<'__GH_EOF__'\n"
-        f"{pr_list_response}\n"
-        "__GH_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(fakes_dir / "gh", body)
-
-
-def _fake_python3_stories(fakes_dir: Path, archive_exit: int = 0) -> None:
-    """Wrapper invoked when the reconciler calls `python3 <stories.py> archive ...`.
-
-    Substitutes the python3 binary on PATH with a wrapper that detects
-    `archive` in argv and short-circuits, logging the call; any other
-    invocation falls through to the real python3.
+    Calls ``spy_notify`` to drop the notify shim, then symlinks the real
+    ``stories.py`` into ``<fakes_dir>/fake-pack/overlay/.../sdlc-discipline/``
+    so the reconciler's ``python3 <bridge>/stories.py archive`` invocation
+    resolves to a real file. The symlink is test-fixture setup beyond
+    pure-spy logic, which is why it stays local rather than living in
+    ``_spies.py``.
     """
-    real_python = subprocess.run(
-        ["which", "python3"], capture_output=True, text=True
-    ).stdout.strip()
-    body = (
-        "#!/bin/bash\n"
-        "# If invoked with a stories.py path + 'archive' subcommand, record + exit.\n"
-        'for arg in "$@"; do\n'
-        '    if [ "$arg" = "archive" ]; then\n'
-        f'        echo "$@" >> "{fakes_dir}/stories-archive-argv.log"\n'
-        f"        exit {archive_exit}\n"
-        "    fi\n"
-        "done\n"
-        f'exec "{real_python}" "$@"\n'
-    )
-    _write_executable(fakes_dir / "python3", body)
-
-
-def _fake_notify(fakes_dir: Path) -> None:
-    body = f'#!/bin/bash\necho "$@" >> "{fakes_dir}/notify-argv.log"\nexit 0\n'
-    pack_assets_scripts = fakes_dir / "fake-pack" / "assets" / "scripts"
-    pack_assets_scripts.mkdir(parents=True, exist_ok=True)
-    _write_executable(pack_assets_scripts / "sdlc-notify.sh", body)
-    # Also symlink the real stories.py into the fake-pack layout.
+    spy_notify(fakes_dir)
     fake_bridge = (
         fakes_dir
         / "fake-pack"
@@ -187,11 +121,11 @@ class FeatureGateTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir)
-            _fake_gh(fakes_dir)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             # No env var set → default OFF → script exits early; gc never invoked.
             env = {
@@ -213,11 +147,11 @@ class FeatureGateTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir)
-            _fake_gh(fakes_dir)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root, enabled=True)
 
@@ -245,11 +179,11 @@ class HighConfidenceArchiveTests(unittest.TestCase):
                     }
                 ]
             )
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads_json)
-            _fake_gh(fakes_dir)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -279,11 +213,11 @@ class HighConfidenceArchiveTests(unittest.TestCase):
                     }
                 ]
             )
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir)  # no bead match
-            _fake_gh(fakes_dir, pr_list_response=prs_json)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir)  # no bead match
+            spy_gh_pr_list(fakes_dir, pr_list_response=prs_json)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -310,11 +244,11 @@ class HighConfidenceArchiveTests(unittest.TestCase):
                     }
                 ]
             )
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir)
-            _fake_gh(fakes_dir, pr_list_response=prs_json)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir)
+            spy_gh_pr_list(fakes_dir, pr_list_response=prs_json)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -341,11 +275,11 @@ class SkipTests(unittest.TestCase):
                     },
                 ]
             )
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response=beads_json)
-            _fake_gh(fakes_dir)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -361,11 +295,11 @@ class SkipTests(unittest.TestCase):
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             _write_spec(rig_root / "stories", "EL-400", status="ready")
             # bd returns no matching bead; gh returns no matching PR.
-            _fake_gc(fakes_dir, _rig_list_json("test-rig", rig_root))
-            _fake_bd(fakes_dir, list_response="[]")
-            _fake_gh(fakes_dir, pr_list_response="[]")
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response="[]")
+            spy_gh_pr_list(fakes_dir, pr_list_response="[]")
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             result = _invoke(fakes_dir, city_root)
 
@@ -382,11 +316,11 @@ class NoCityRootTests(unittest.TestCase):
             tmp = Path(tmp_str)
             fakes_dir = tmp / "fakes"
             fakes_dir.mkdir()
-            _fake_gc(fakes_dir, '{"rigs": []}')
-            _fake_bd(fakes_dir)
-            _fake_gh(fakes_dir)
-            _fake_python3_stories(fakes_dir)
-            _fake_notify(fakes_dir)
+            spy_gc_rig_list(fakes_dir, '{"rigs": []}')
+            spy_bd_list(fakes_dir)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
 
             env = {
                 **os.environ,
