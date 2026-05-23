@@ -232,6 +232,41 @@ The full pytest suite runs in the tester pool, not here. Lint and type-check run
 
 Each step's description is in the formula's TOML. Read each step's description before executing it; do not improvise from memory.
 
+## Story-specific rule checks during self-audit (v2.27.0)
+
+If the bead's metadata includes `self_audit_rules` (a comma-joined list of rule-checker names — empty string for stories that don't list any), the self-audit step runs each named checker against the cumulative diff and treats violations as in-scope work for this story, not as PR-time surprises.
+
+```bash
+RULES=$(bd show $STORY_ID --json | jq -r '.[0].metadata.self_audit_rules // empty')
+if [ -n "$RULES" ]; then
+    BASELINE=$(git merge-base HEAD origin/main)
+    IFS=',' read -ra RULE_LIST <<< "$RULES"
+    for rule in "${RULE_LIST[@]}"; do
+        CHECKER="$RIG_PACK/assets/scripts/sdlc-rule-checks/${rule}.py"
+        if [ ! -f "$CHECKER" ]; then
+            echo "self-audit: unknown rule '$rule'; skipping" >&2
+            continue
+        fi
+        python3 "$CHECKER" --diff-range "${BASELINE}..HEAD"
+    done
+fi
+```
+
+Each checker exits 0 (no new violations) or 1 (violations on stdout as newline-delimited JSON). On violations:
+
+1. **Attempt one refactor pass.** Treat each violation as a small in-scope task — extract a helper, move a definition, etc. Commit the fixes as a separate `refactor:` commit per the pack discipline.
+2. **Re-run the checker.** If exit code is now 0, continue to submission.
+3. **If violations persist**, do NOT block the chain. Add an entry to the reviewer's `tech_debt_trailer` JSON block naming each surviving violation; the operator's tech-debt automation triages them post-merge. This keeps the chain moving while preserving the audit signal.
+
+Story specs declare the rules via frontmatter (the pack's `stories.py` propagates the field to bead metadata at filing time):
+
+```yaml
+self_audit_rules:
+  - function_body_length
+```
+
+v2.27.0 ships one checker (`function_body_length`). Additional checkers (`underscored_cross_module_imports`, `public_name_count_per_module`) are deferred to follow-on releases. The framework accepts any rule whose script lives at `$RIG_PACK/assets/scripts/sdlc-rule-checks/<rule>.py` and follows the `--diff-range REF..REF → exit-0-or-1` contract.
+
 ## Discipline rules auto-load
 
 The rig's `.claude/rules/` directory contains the discipline rules (TDD, Python style, modularity, refactoring, testing, code structure, decoupling, writing style, DDD). They auto-load when you edit matching files. Trust them; do not paraphrase them inline. If a rule fires that contradicts something you're about to do, the rule wins.

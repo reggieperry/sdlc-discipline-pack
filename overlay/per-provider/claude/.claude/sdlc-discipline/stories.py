@@ -431,6 +431,12 @@ def build_graph_plan(
                     "build_item": "" if s.get("build_item") is None else str(s.get("build_item")),
                     "phase": "" if s.get("phase") is None else str(s.get("phase")),
                     "story_file": f"stories/{s['__path'].name}",
+                    # pack #52: comma-joined list of rule-checker names the
+                    # worker's self-audit phase must invoke. Empty string when
+                    # the spec doesn't list any (the common case for feature
+                    # stories). Each name maps to a script at
+                    # $RIG_PACK/assets/scripts/sdlc-rule-checks/<name>.py.
+                    "self_audit_rules": ",".join(s.get("self_audit_rules") or []),
                 },
             }
         )
