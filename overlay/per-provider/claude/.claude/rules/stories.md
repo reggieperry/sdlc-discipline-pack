@@ -51,6 +51,7 @@ Required: `story_id`, `title`, `phase`, `status`. The rest are optional but foll
 | `parent` | story ID / empty | Optional epic-grouping parent (uses bd's `parent_key`). |
 | `labels` | list of strings | bd labels for query filtering (`phase-0`, `sensitive`, `requires-ib`, etc.). |
 | `sensitive_files` | list of paths | Subset of `.claude/rules/project/sensitive-files.md` this story touches. Empty list `[]` means none. |
+| `self_audit_rules` | list of rule names | Optional. Rule-checker names the worker's self-audit phase must invoke against the diff. Each name maps to `$RIG_PACK/assets/scripts/sdlc-rule-checks/<name>.py`. Use for cleanup stories targeting a mechanical rule (e.g., `function_body_length`) so the worker catches its own residue before submission. Empty / omitted for feature stories. |
 | `status` | enum | `draft` / `ready` / `filed` / `in-flight` / `merged` / `closed`. |
 | `filed_as_bead` | bead ID / empty | Populated by `stories.py file`; empty until filed. |
 
