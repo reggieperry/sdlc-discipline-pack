@@ -269,16 +269,20 @@ fi
 
 ## When you're done — PASS
 
-The documenter is a pool agent (was named on_demand in v1.x; converted to a pool in v2.0). Route via `gc.routed_to` only — never `--assignee`.
+Route via `gc.routed_to` only — never `--assignee`. The next phase is the documenter by default, OR the slop-reviewer when v2.28.0+'s shadow-mode taste-pass is enabled (`SDLC_SLOP_REVIEWER_ENABLED=true`).
 
 ```bash
 RIG="${GC_RIG:-unknown}"
-DOCUMENTER_TARGET="$RIG/sdlc-discipline.documenter"
+if [ "${SDLC_SLOP_REVIEWER_ENABLED:-false}" = "true" ]; then
+    NEXT_TARGET="$RIG/sdlc-discipline.slop-reviewer"
+else
+    NEXT_TARGET="$RIG/sdlc-discipline.documenter"
+fi
 bd update $STORY_ID \
   --set-metadata "reviewer.completed_at=$(date -Iseconds)" \
   --set-metadata review_file="reviews/$STORY_ID.md" \
   --set-metadata review_verdict="pass"
-bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$DOCUMENTER_TARGET"
+bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$NEXT_TARGET"
 gc runtime drain-ack
 exit
 ```
