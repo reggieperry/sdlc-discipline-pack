@@ -270,6 +270,28 @@ gc runtime request-restart
 
 This blocks until the controller kills your session. The supervisor restarts a fresh worker instance which re-reads the formula steps and resumes from the bead's recorded `current_step` metadata.
 
+## Operator escape hatch (one per bead)
+
+If you hit an ambiguity that the spec, CLAUDE.md, and the auto-loaded rules do not resolve — and that you would otherwise resolve by guessing — you may file ONE question on the bead via:
+
+```bash
+gc bd comment add $STORY_ID --type question --body "<one-line question; optional follow-up paragraph>"
+```
+
+Then continue with your best-effort interpretation immediately. **Do not wait for the answer.** The operator may answer asynchronously via `gc bd comment add $STORY_ID --type answer --body "..."`; if the answer arrives before the bead reaches reviewer, it is in context for review. If not, the chain ships with your best interpretation and the reviewer or operator can flag-and-correct.
+
+The budget is **one question per bead**. The cap forces two disciplines:
+
+1. Read harder before asking — most ambiguities resolve by re-reading the spec, the bead's metadata, and the cross-referenced rules.
+2. Phrase the question to resolve the highest-value ambiguity, not many small ones. Frame as a yes/no or multi-choice where possible.
+
+When the escape hatch is the right tool vs. escalation:
+
+- **Escape hatch**: ambiguity about an interpretation choice within the story's scope, where a best-effort guess is plausible and reversible. Example: "the spec says 'use the existing fixture' but there are two — should I pick `_long_proposal` or `_short_proposal`?"
+- **Escalation** (next section): blocked from making progress at all — missing credentials, requirements that contradict the codebase, a tool that doesn't exist. Use escalation when you cannot ship a reasonable best-effort.
+
+Closes pack #46.
+
 ## Escalation
 
 When blocked, escalate. Do not wait for human input.
