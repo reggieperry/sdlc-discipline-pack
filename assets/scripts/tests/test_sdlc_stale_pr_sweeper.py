@@ -93,7 +93,7 @@ def _rig_list_one(rig_root: str) -> str:
 
 def _setup_env(tmp: Path, gc_path: Path, bd_path: Path, gh_path: Path, py_path: Path) -> dict:
     """Build a test env that pins fakes on PATH and skips the SDLC enabled
-    gate (sweeper requires SDLC_SWEEPER_ENABLED!=false; default is enabled)."""
+    gate (sweeper requires SDLC_STALE_PR_SWEEPER_ENABLED!=false; default is enabled)."""
     return {
         **os.environ,
         "PATH": f"{tmp}:{os.environ.get('PATH', '')}",
@@ -264,6 +264,68 @@ class SweeperReconciliationTests(unittest.TestCase):
         # No bead-level operations should have fired.
         self.assertEqual(self._bd_calls(), [])
         self.assertEqual(self._python_calls(), [])
+
+
+class FeatureGateTests(unittest.TestCase):
+    """v2.29.9 env-var rename: SDLC_SWEEPER_ENABLED → SDLC_STALE_PR_SWEEPER_ENABLED.
+
+    Pins the gate's three branches: new name disables, legacy name still
+    disables (with stderr warning), new name wins when both are set.
+    Mirrors the v2.29.4 rebase-watcher gate tests.
+    """
+
+    def _invoke_with_env(self, env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
+        """Invoke the sweeper with the given env overrides on top of a minimal
+        valid env. No fakes wired — when the gate disables, the script exits
+        before any binary is needed. When the gate passes, the script reaches
+        the city-root resolver which exits cleanly with no rigs."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            env = {
+                **os.environ,
+                "PATH": f"{tmp}:{os.environ.get('PATH', '')}",
+                "PACK_DIR": str(tmp / "pack"),
+                "GC_CITY_ROOT": str(tmp / "city"),
+            }
+            # Strip whatever the parent shell might have set so the test env is hermetic.
+            env.pop("SDLC_STALE_PR_SWEEPER_ENABLED", None)
+            env.pop("SDLC_SWEEPER_ENABLED", None)
+            env.update(env_overrides)
+            (tmp / "city").mkdir(parents=True)
+            return subprocess.run(
+                [str(SCRIPT_PATH)],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+    def test_new_name_false_disables(self) -> None:
+        result = self._invoke_with_env({"SDLC_STALE_PR_SWEEPER_ENABLED": "false"})
+
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("deprecated", result.stderr)
+
+    def test_legacy_name_false_still_disables_with_warning(self) -> None:
+        """v2.29.9 backward-compat: SDLC_SWEEPER_ENABLED=false still gates the
+        sweeper off, AND a stderr warning fires telling the operator to migrate."""
+        result = self._invoke_with_env({"SDLC_SWEEPER_ENABLED": "false"})
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("SDLC_SWEEPER_ENABLED is deprecated", result.stderr)
+        self.assertIn("SDLC_STALE_PR_SWEEPER_ENABLED", result.stderr)
+
+    def test_new_name_wins_when_both_set(self) -> None:
+        """Precedence pin: legacy=false but new=true → gate passes (no warning)."""
+        result = self._invoke_with_env(
+            {"SDLC_STALE_PR_SWEEPER_ENABLED": "true", "SDLC_SWEEPER_ENABLED": "false"}
+        )
+
+        # Gate passes; the script reaches the city-root step and exits with no rigs.
+        self.assertEqual(result.returncode, 0)
+        # Warning should NOT fire — new var is set, so the legacy fallback
+        # branch isn't entered.
+        self.assertNotIn("deprecated", result.stderr)
 
 
 if __name__ == "__main__":

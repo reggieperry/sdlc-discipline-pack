@@ -30,12 +30,22 @@
 # This script only acts on `status=closed` beads, so a re-triggered bead is
 # naturally skipped until it closes again.
 #
-# Tunable: SDLC_SWEEPER_ENABLED (default "true"). When "false", exits at line
-# one without scanning. The event-triggered watcher still fires.
+# Tunable: SDLC_STALE_PR_SWEEPER_ENABLED (default "true"). When "false",
+# exits at line one without scanning. The event-triggered watcher still fires.
+# Legacy name `SDLC_SWEEPER_ENABLED` is still honored for one release with
+# a stderr warning; will be removed in v2.30 alongside `SDLC_WATCHER_ENABLED`.
 
 set -euo pipefail
 
-if [ "${SDLC_SWEEPER_ENABLED:-true}" != "true" ]; then
+# Feature gate — operator override.
+# v2.29.9: renamed SDLC_SWEEPER_ENABLED → SDLC_STALE_PR_SWEEPER_ENABLED to match
+# the SDLC_<SHORTNAME>_ENABLED convention used by the other detector scripts.
+# The legacy name is still read for one release with a deprecation warning.
+if [ -n "${SDLC_SWEEPER_ENABLED:-}" ] && [ -z "${SDLC_STALE_PR_SWEEPER_ENABLED:-}" ]; then
+    echo "sdlc-stale-pr-sweeper: SDLC_SWEEPER_ENABLED is deprecated; use SDLC_STALE_PR_SWEEPER_ENABLED. Honoring legacy value for this release." >&2
+    SDLC_STALE_PR_SWEEPER_ENABLED="$SDLC_SWEEPER_ENABLED"
+fi
+if [ "${SDLC_STALE_PR_SWEEPER_ENABLED:-true}" != "true" ]; then
     exit 0
 fi
 
