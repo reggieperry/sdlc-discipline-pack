@@ -110,6 +110,144 @@ def spy_gc_rig_list(tmp: Path, rig_list_json: str) -> Path:
     return path
 
 
+def spy_gc_with_session_dispatch(
+    tmp: Path,
+    *,
+    bd_list_json: str = "[]",
+    session_list_json: str = "[]",
+    peek_output: str = "",
+    submit_exit: int = 0,
+) -> Path:
+    """Fake `gc` that dispatches on bd/session subcommands.
+
+    Used by `sdlc-alive-idle-detector.sh` tests. Records argv to
+    ``<tmp>/gc-argv.log`` AND appends ``gc <argv>`` to
+    ``<tmp>/call-sequence.log`` so tests can verify ordering across peers
+    in a single read.
+
+    Dispatch:
+    - ``gc bd list ...``      → echoes ``bd_list_json``
+    - ``gc session list ...`` → echoes ``session_list_json``
+    - ``gc session peek ...`` → echoes ``peek_output``
+    - ``gc session submit ...`` → exits ``submit_exit``
+    - anything else → exits 0 silently
+
+    Returns the spy's Path.
+    """
+    path = tmp / "gc"
+    body = (
+        "#!/bin/bash\n"
+        f'echo "$@" >> "{tmp}/gc-argv.log"\n'
+        f'echo "gc $@" >> "{tmp}/call-sequence.log"\n'
+        'if [ "$1" = "bd" ] && [ "$2" = "list" ]; then\n'
+        "    cat <<'__BD_EOF__'\n"
+        f"{bd_list_json}\n"
+        "__BD_EOF__\n"
+        "    exit 0\n"
+        "fi\n"
+        'if [ "$1" = "session" ] && [ "$2" = "list" ]; then\n'
+        "    cat <<'__SL_EOF__'\n"
+        f"{session_list_json}\n"
+        "__SL_EOF__\n"
+        "    exit 0\n"
+        "fi\n"
+        'if [ "$1" = "session" ] && [ "$2" = "peek" ]; then\n'
+        "    cat <<'__PEEK_EOF__'\n"
+        f"{peek_output}\n"
+        "__PEEK_EOF__\n"
+        "    exit 0\n"
+        "fi\n"
+        'if [ "$1" = "session" ] && [ "$2" = "submit" ]; then\n'
+        f"    exit {submit_exit}\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    _write_executable(path, body)
+    return path
+
+
+def spy_gc_with_bd_show(
+    tmp: Path,
+    *,
+    bead_json: str = "",
+    show_exit: int = 0,
+    kill_exit: int = 0,
+    reload_exit: int = 0,
+    update_exit: int = 0,
+) -> Path:
+    """Fake `gc` that dispatches on bd-show, bd-update, session kill, supervisor reload.
+
+    Used by `sdlc-drain-ack-recover.sh` tests. Records argv to
+    ``<tmp>/gc-argv.log`` AND appends ``gc <argv>`` to
+    ``<tmp>/call-sequence.log``.
+
+    Strips a ``--rig <rig>`` prefix on `bd` subcommands so callers don't
+    need to encode the rig namespace in their dispatch test.
+
+    Dispatch:
+    - ``gc bd [--rig <rig>] show <bead-id> --json`` → echoes ``bead_json``, exits ``show_exit``
+    - ``gc bd [--rig <rig>] update <bead-id> ...``  → exits ``update_exit``
+    - ``gc session kill <session-id>``              → exits ``kill_exit``
+    - ``gc supervisor reload``                      → exits ``reload_exit``
+    - anything else → exits 0 silently
+
+    Tests pass a non-zero exit for one subcommand at a time to verify
+    fail-closed semantics without disturbing the other steps. Returns
+    the spy's Path.
+    """
+    path = tmp / "gc"
+    body = (
+        "#!/bin/bash\n"
+        f'echo "$@" >> "{tmp}/gc-argv.log"\n'
+        f'echo "gc $@" >> "{tmp}/call-sequence.log"\n'
+        'if [ "$1" = "bd" ]; then\n'
+        "    shift\n"
+        "    # consume --rig <rig> if present\n"
+        '    if [ "${1:-}" = "--rig" ]; then shift 2; fi\n'
+        '    sub="${1:-}"\n'
+        '    if [ "$sub" = "show" ]; then\n'
+        "        cat <<'__BEAD_EOF__'\n"
+        f"{bead_json}\n"
+        "__BEAD_EOF__\n"
+        f"        exit {show_exit}\n"
+        '    elif [ "$sub" = "update" ]; then\n'
+        f"        exit {update_exit}\n"
+        "    fi\n"
+        "    exit 0\n"
+        'elif [ "$1" = "session" ] && [ "${2:-}" = "kill" ]; then\n'
+        f"    exit {kill_exit}\n"
+        'elif [ "$1" = "supervisor" ] && [ "${2:-}" = "reload" ]; then\n'
+        f"    exit {reload_exit}\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    _write_executable(path, body)
+    return path
+
+
+def spy_gc_cities(tmp: Path, cities_output: str = "") -> Path:
+    """Fake `gc` that returns ``cities_output`` for ``gc cities``.
+
+    Used by `sdlc-find-city-root.sh` tests. Records argv to
+    ``<tmp>/gc-argv.log``. Anything other than ``gc cities`` exits 0
+    silently. Returns the spy's Path.
+    """
+    path = tmp / "gc"
+    body = (
+        "#!/bin/bash\n"
+        f'echo "$@" >> "{tmp}/gc-argv.log"\n'
+        'if [ "$1" = "cities" ]; then\n'
+        "    cat <<'__GC_EOF__'\n"
+        f"{cities_output}\n"
+        "__GC_EOF__\n"
+        "    exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    _write_executable(path, body)
+    return path
+
+
 def spy_bd_list(tmp: Path, list_response: str = "[]") -> Path:
     """Fake `bd` that returns ``list_response`` for ``bd list ...``.
 
@@ -316,144 +454,6 @@ def spy_notify(tmp: Path) -> Path:
     pack_assets_scripts.mkdir(parents=True, exist_ok=True)
     path = pack_assets_scripts / "sdlc-notify.sh"
     body = f'#!/bin/bash\necho "$@" >> "{tmp}/notify-argv.log"\nexit 0\n'
-    _write_executable(path, body)
-    return path
-
-
-def spy_gc_with_session_dispatch(
-    tmp: Path,
-    *,
-    bd_list_json: str = "[]",
-    session_list_json: str = "[]",
-    peek_output: str = "",
-    submit_exit: int = 0,
-) -> Path:
-    """Fake `gc` that dispatches on bd/session subcommands.
-
-    Used by `sdlc-alive-idle-detector.sh` tests. Records argv to
-    ``<tmp>/gc-argv.log`` AND appends ``gc <argv>`` to
-    ``<tmp>/call-sequence.log`` so tests can verify ordering across peers
-    in a single read.
-
-    Dispatch:
-    - ``gc bd list ...``      → echoes ``bd_list_json``
-    - ``gc session list ...`` → echoes ``session_list_json``
-    - ``gc session peek ...`` → echoes ``peek_output``
-    - ``gc session submit ...`` → exits ``submit_exit``
-    - anything else → exits 0 silently
-
-    Returns the spy's Path.
-    """
-    path = tmp / "gc"
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{tmp}/gc-argv.log"\n'
-        f'echo "gc $@" >> "{tmp}/call-sequence.log"\n'
-        'if [ "$1" = "bd" ] && [ "$2" = "list" ]; then\n'
-        "    cat <<'__BD_EOF__'\n"
-        f"{bd_list_json}\n"
-        "__BD_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        'if [ "$1" = "session" ] && [ "$2" = "list" ]; then\n'
-        "    cat <<'__SL_EOF__'\n"
-        f"{session_list_json}\n"
-        "__SL_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        'if [ "$1" = "session" ] && [ "$2" = "peek" ]; then\n'
-        "    cat <<'__PEEK_EOF__'\n"
-        f"{peek_output}\n"
-        "__PEEK_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        'if [ "$1" = "session" ] && [ "$2" = "submit" ]; then\n'
-        f"    exit {submit_exit}\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(path, body)
-    return path
-
-
-def spy_gc_with_bd_show(
-    tmp: Path,
-    *,
-    bead_json: str = "",
-    show_exit: int = 0,
-    kill_exit: int = 0,
-    reload_exit: int = 0,
-    update_exit: int = 0,
-) -> Path:
-    """Fake `gc` that dispatches on bd-show, bd-update, session kill, supervisor reload.
-
-    Used by `sdlc-drain-ack-recover.sh` tests. Records argv to
-    ``<tmp>/gc-argv.log`` AND appends ``gc <argv>`` to
-    ``<tmp>/call-sequence.log``.
-
-    Strips a ``--rig <rig>`` prefix on `bd` subcommands so callers don't
-    need to encode the rig namespace in their dispatch test.
-
-    Dispatch:
-    - ``gc bd [--rig <rig>] show <bead-id> --json`` → echoes ``bead_json``, exits ``show_exit``
-    - ``gc bd [--rig <rig>] update <bead-id> ...``  → exits ``update_exit``
-    - ``gc session kill <session-id>``              → exits ``kill_exit``
-    - ``gc supervisor reload``                      → exits ``reload_exit``
-    - anything else → exits 0 silently
-
-    Tests pass a non-zero exit for one subcommand at a time to verify
-    fail-closed semantics without disturbing the other steps. Returns
-    the spy's Path.
-    """
-    path = tmp / "gc"
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{tmp}/gc-argv.log"\n'
-        f'echo "gc $@" >> "{tmp}/call-sequence.log"\n'
-        'if [ "$1" = "bd" ]; then\n'
-        "    shift\n"
-        "    # consume --rig <rig> if present\n"
-        '    if [ "${1:-}" = "--rig" ]; then shift 2; fi\n'
-        '    sub="${1:-}"\n'
-        '    if [ "$sub" = "show" ]; then\n'
-        "        cat <<'__BEAD_EOF__'\n"
-        f"{bead_json}\n"
-        "__BEAD_EOF__\n"
-        f"        exit {show_exit}\n"
-        '    elif [ "$sub" = "update" ]; then\n'
-        f"        exit {update_exit}\n"
-        "    fi\n"
-        "    exit 0\n"
-        'elif [ "$1" = "session" ] && [ "${2:-}" = "kill" ]; then\n'
-        f"    exit {kill_exit}\n"
-        'elif [ "$1" = "supervisor" ] && [ "${2:-}" = "reload" ]; then\n'
-        f"    exit {reload_exit}\n"
-        "fi\n"
-        "exit 0\n"
-    )
-    _write_executable(path, body)
-    return path
-
-
-def spy_gc_cities(tmp: Path, cities_output: str = "") -> Path:
-    """Fake `gc` that returns ``cities_output`` for ``gc cities``.
-
-    Used by `sdlc-find-city-root.sh` tests. Records argv to
-    ``<tmp>/gc-argv.log``. Anything other than ``gc cities`` exits 0
-    silently. Returns the spy's Path.
-    """
-    path = tmp / "gc"
-    body = (
-        "#!/bin/bash\n"
-        f'echo "$@" >> "{tmp}/gc-argv.log"\n'
-        'if [ "$1" = "cities" ]; then\n'
-        "    cat <<'__GC_EOF__'\n"
-        f"{cities_output}\n"
-        "__GC_EOF__\n"
-        "    exit 0\n"
-        "fi\n"
-        "exit 0\n"
-    )
     _write_executable(path, body)
     return path
 
