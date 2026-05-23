@@ -27,12 +27,10 @@ builders for the synthetic-retry test mode; deferred — its dispatch
 shape is sufficiently narrow that the consolidation cost isn't yet
 justified per Rule of Three.
 
-`_write_executable` is re-exported from `_helpers` so callers need only
-one import. `_fake_msmtp` stays in `_helpers.py` until its callers
-(`test_sdlc_notify.py`, `test_sdlc_finalizer_notify.py`) migrate in a
-later pass — `_fake_msmtp` is itself a Spy (records argv + stdin) and
-will land in this module as `spy_msmtp` when the collapse happens.
-Underscore-prefix exports keep unittest discovery clean.
+v2.29.8 (issue #113) collapsed the previous `_helpers.py` module into
+this one. `_write_executable` now lives here directly (no re-export
+hop); `_fake_msmtp` was renamed `spy_msmtp` per Meszaros's Test Spy
+vocabulary. Underscore-prefix exports keep unittest discovery clean.
 
 Convention: every factory takes the tempdir as its first positional arg,
 writes the spy script under it, and returns the Path to the spy. The
@@ -49,10 +47,21 @@ originals and exec-clean.
 
 from __future__ import annotations
 
+import stat
 import subprocess
 from pathlib import Path
 
-from _helpers import _write_executable
+
+def _write_executable(path: Path, body: str) -> None:
+    """Write a shell script and chmod it executable.
+
+    The chmod adds u+x, g+x, o+x while preserving the existing mode bits.
+    Tests rely on this for any binary they place into a tempdir then add
+    to PATH.
+    """
+    path.write_text(body)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
 
 __all__ = [
     "_write_executable",
@@ -67,6 +76,7 @@ __all__ = [
     "spy_python3_stories_archive",
     "spy_python3_stories_passthrough",
     "spy_notify",
+    "spy_msmtp",
     "spy_recorder",
 ]
 
@@ -435,6 +445,31 @@ def spy_gc_cities(tmp: Path, cities_output: str = "") -> Path:
         "    exit 0\n"
         "fi\n"
         "exit 0\n"
+    )
+    _write_executable(path, body)
+    return path
+
+
+def spy_msmtp(tmp: Path, *, exit_code: int = 0) -> Path:
+    """Fake `msmtp` binary that records argv + stdin then exits.
+
+    Records:
+    - argv  → ``<tmp>/msmtp-argv.log`` (one line per call, space-separated)
+    - stdin → ``<tmp>/msmtp-stdin.log`` (multi-line, appended across calls)
+
+    Tests inspect those log files to assert on recipient (argv) and
+    Subject + body (stdin). The exit code defaults to 0; tests for
+    transport failure pass a non-zero value.
+
+    Used by `sdlc-notify.sh` and `sdlc-finalizer-notify.sh` tests.
+    Returns the spy's Path.
+    """
+    path = tmp / "msmtp"
+    body = (
+        "#!/bin/bash\n"
+        f'echo "$@" >> "{tmp}/msmtp-argv.log"\n'
+        f'cat >> "{tmp}/msmtp-stdin.log"\n'
+        f"exit {exit_code}\n"
     )
     _write_executable(path, body)
     return path
