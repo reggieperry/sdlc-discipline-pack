@@ -110,6 +110,34 @@ write_metadata() {
     bd update "$STORY_ID" "$@" >/dev/null
 }
 
+# Append a single exit-cause entry to `<template>.exit_history` (pack
+# #105 audit-trail improvement). Reads the prior value, appends
+# `<ISO-ts>~<kind>~<cause>` separated by `|`, writes back. Best-effort —
+# never blocks the retry loop on metadata write failure. The `|` and
+# `~` separators are chosen so they never collide with ISO timestamps
+# or wrapper-side cause strings (e.g. TURN_CAP, API_OVERLOAD).
+#
+# After the wrapper exits, the operator can read the full history via:
+#   bd show <id> --json | jq -r ".[0].metadata.\"<template>.exit_history\""
+# and parse with:
+#   tr '|' '\n' | awk -F'~' '{print $1, $2, $3}'
+append_exit_history() {
+    local kind="$1"
+    local cause="$2"
+    local ts new_entry prior new_history
+    ts=$(date -Iseconds)
+    new_entry="${ts}~${kind}~${cause}"
+    prior=$(bd show "$STORY_ID" --json 2>/dev/null \
+        | jq -r ".[0].metadata.\"${SDLC_TEMPLATE}.exit_history\" // \"\"" 2>/dev/null)
+    if [ -z "$prior" ] || [ "$prior" = "null" ]; then
+        new_history="$new_entry"
+    else
+        new_history="${prior}|${new_entry}"
+    fi
+    bd update "$STORY_ID" --set-metadata "${SDLC_TEMPLATE}.exit_history=${new_history}" \
+        >/dev/null 2>&1 || true
+}
+
 ATTEMPT=1
 
 while true; do
@@ -156,6 +184,7 @@ while true; do
                 --set-metadata "${SDLC_TEMPLATE}.state=exhausted" \
                 --set-metadata "${SDLC_TEMPLATE}.last_exit_cause=${CAUSE}" \
                 --set-metadata "${SDLC_TEMPLATE}.exhausted_at=$(date -Iseconds)"
+            append_exit_history "exhausted" "$CAUSE"
             exit 75
             ;;
         RETRY*)
@@ -164,6 +193,7 @@ while true; do
             write_metadata \
                 --set-metadata "${SDLC_TEMPLATE}.last_exit_cause=${CAUSE}" \
                 --set-metadata "${SDLC_TEMPLATE}.state=resuming"
+            append_exit_history "retry" "$CAUSE"
             if [ -n "$SLEEP_OVERRIDE" ]; then
                 sleep "$SLEEP_OVERRIDE"
             else

@@ -311,6 +311,20 @@ while IFS=$'\t' read -r _TAG BEAD_ID TARGET; do
     if "$GC_BIN" session submit "$TARGET" "continue" --intent default >/dev/null 2>&1; then
         NUDGED_BEADS+=("$BEAD_ID")
         NUDGED=$((NUDGED + 1))
+        # Audit-trail improvement (pack #105) — per-bead nudge counter
+        # + last-nudge timestamp on the bead's metadata. Lets operators
+        # grep `bd show <id> --json` for beads ever nudged by this
+        # detector, and how many times. Read-then-increment-then-write;
+        # best-effort, never blocks the detector loop.
+        PREV_NUDGE_COUNT=$("$GC_BIN" bd show "$BEAD_ID" --json 2>/dev/null \
+            | jq -r '.[0].metadata.alive_idle_nudge_count // "0"' 2>/dev/null)
+        PREV_NUDGE_COUNT="${PREV_NUDGE_COUNT:-0}"
+        [ "$PREV_NUDGE_COUNT" = "null" ] && PREV_NUDGE_COUNT=0
+        NEW_NUDGE_COUNT=$((PREV_NUDGE_COUNT + 1))
+        "$GC_BIN" bd update "$BEAD_ID" \
+            --set-metadata "alive_idle_last_nudge_at=$(date -Iseconds)" \
+            --set-metadata "alive_idle_nudge_count=$NEW_NUDGE_COUNT" \
+            >/dev/null 2>&1 || true
         "$NOTIFY_BIN" --subject "alive-idle nudge fired" \
                       --body "Nudged stalled worker session $TARGET (bead $BEAD_ID)" \
                       >/dev/null 2>&1 || true
