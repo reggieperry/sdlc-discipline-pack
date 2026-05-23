@@ -579,18 +579,13 @@ def cmd_archive(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def cmd_rebase(args: argparse.Namespace) -> int:
-    """Reopen a closed chain bead and route it back to the finalizer.
+def _find_unique_closed_bead(story_id: str, rig_root: Path) -> tuple[dict | None, int]:
+    """Return (bead, 0) if exactly one closed bead matches story_id.
 
-    Used after a sibling PR merges and moves the target branch — the PR
-    open against the old target now needs to rebase. The finalizer's
-    rebase-against-target step will either succeed (and re-merge) or
-    bounce the bead to the worker per the v2.7.0 protocol.
+    Returns (None, exit_code) on any failure: bd-list failure (non-zero
+    exit), malformed JSON (1), no match (1), or ambiguous multiple
+    matches (1). The caller forwards the exit_code to its own return.
     """
-    story_id = args.story_id
-    rig_root = find_rig_root()
-
-    # Find the closed bead whose metadata.story_id matches.
     result = subprocess.run(
         ["bd", "list", "--status=closed", "--limit", "5000", "--json"],
         cwd=rig_root,
@@ -599,17 +594,17 @@ def cmd_rebase(args: argparse.Namespace) -> int:
     )
     if result.returncode != 0:
         print(f"rebase: bd list failed:\n{result.stderr}", file=sys.stderr)
-        return result.returncode
+        return None, result.returncode
     try:
         beads = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         print(f"rebase: bd list output is not JSON: {exc}", file=sys.stderr)
-        return 1
+        return None, 1
 
     matching = [b for b in beads if (b.get("metadata") or {}).get("story_id") == story_id]
     if not matching:
         print(f"rebase: no closed bead found for story_id '{story_id}'", file=sys.stderr)
-        return 1
+        return None, 1
     if len(matching) > 1:
         ids = ", ".join(b["id"] for b in matching)
         print(
@@ -617,27 +612,18 @@ def cmd_rebase(args: argparse.Namespace) -> int:
             "pick the bead manually via bd",
             file=sys.stderr,
         )
-        return 1
+        return None, 1
+    return matching[0], 0
 
-    bead = matching[0]
-    bead_id = bead["id"]
-    md = bead.get("metadata") or {}
 
-    # Validate the bead is in the expected post-finalize state.
-    final_state = md.get("final_state", "")
-    if final_state != "pr_open_for_human":
-        print(
-            f"rebase: bead {bead_id} has final_state='{final_state}', "
-            "not 'pr_open_for_human'; refusing to rebase",
-            file=sys.stderr,
-        )
-        return 1
-    pr_url = md.get("pr_url", "")
-    if not pr_url:
-        print(f"rebase: bead {bead_id} has no metadata.pr_url; cannot rebase", file=sys.stderr)
-        return 1
+def _check_pr_still_open(pr_url: str, rig_root: Path) -> int:
+    """Return 0 if the PR is OPEN, non-zero on any failure or non-OPEN state.
 
-    # Confirm the PR is still open before reopening the bead.
+    Failure modes (each prints a remediation hint):
+    - gh pr view failure (forwards gh's exit code)
+    - malformed gh JSON (1)
+    - PR state != OPEN (1)
+    """
     pr_number = pr_url.rstrip("/").split("/")[-1]
     result = subprocess.run(
         ["gh", "pr", "view", pr_number, "--json", "state"],
@@ -659,26 +645,22 @@ def cmd_rebase(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    return 0
 
-    # Determine routing target from the bead's recorded rig.
-    rig = md.get("rig", "")
-    if not rig:
-        print(
-            f"rebase: bead {bead_id} has no metadata.rig; "
-            "cannot determine finalizer routing target",
-            file=sys.stderr,
-        )
-        return 1
-    finalizer_target = f"{rig}/sdlc-discipline.finalizer"
 
-    # Reopen and route. Preserve any existing merge_failure_count so retries
-    # via this command are idempotent against the bounce limit.
-    #
-    # Clear the assignee. The supervisor's pool reconciler queries with
-    # `--unassigned` when scaling pools, so a bead with a stale assignee
-    # (left over from its original chain run) is invisible to scale-check
-    # even when routed correctly. Clearing here lets the finalizer pool
-    # spin up a fresh session, which will `--claim` (reassign) on startup.
+def _reopen_bead_routed_to_finalizer(bead_id: str, finalizer_target: str, rig_root: Path) -> int:
+    """Reopen a closed bead with assignee cleared and gc.routed_to set.
+
+    Preserves any existing merge_failure_count so retries via this command
+    are idempotent against the bounce limit. Clears the assignee — the
+    supervisor's pool reconciler queries with `--unassigned` when scaling
+    pools, so a bead with a stale assignee (left over from its original
+    chain run) is invisible to scale-check even when routed correctly.
+    Clearing here lets the finalizer pool spin up a fresh session, which
+    will `--claim` (reassign) on startup.
+
+    Returns 0 on success, the bd-update exit code on failure.
+    """
     update_args = [
         "bd",
         "update",
@@ -692,6 +674,58 @@ def cmd_rebase(args: argparse.Namespace) -> int:
     if result.returncode != 0:
         print(f"rebase: bd update {bead_id} failed:\n{result.stderr}", file=sys.stderr)
         return result.returncode
+    return 0
+
+
+def cmd_rebase(args: argparse.Namespace) -> int:
+    """Reopen a closed chain bead and route it back to the finalizer.
+
+    Used after a sibling PR merges and moves the target branch — the PR
+    open against the old target now needs to rebase. The finalizer's
+    rebase-against-target step will either succeed (and re-merge) or
+    bounce the bead to the worker per the v2.7.0 protocol.
+    """
+    story_id = args.story_id
+    rig_root = find_rig_root()
+
+    bead, exit_code = _find_unique_closed_bead(story_id, rig_root)
+    if bead is None:
+        return exit_code
+
+    bead_id = bead["id"]
+    md = bead.get("metadata") or {}
+
+    # Validate the bead is in the expected post-finalize state.
+    final_state = md.get("final_state", "")
+    if final_state != "pr_open_for_human":
+        print(
+            f"rebase: bead {bead_id} has final_state='{final_state}', "
+            "not 'pr_open_for_human'; refusing to rebase",
+            file=sys.stderr,
+        )
+        return 1
+    pr_url = md.get("pr_url", "")
+    if not pr_url:
+        print(f"rebase: bead {bead_id} has no metadata.pr_url; cannot rebase", file=sys.stderr)
+        return 1
+    rig = md.get("rig", "")
+    if not rig:
+        print(
+            f"rebase: bead {bead_id} has no metadata.rig; "
+            "cannot determine finalizer routing target",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Confirm the PR is still open before reopening the bead.
+    pr_check = _check_pr_still_open(pr_url, rig_root)
+    if pr_check != 0:
+        return pr_check
+
+    finalizer_target = f"{rig}/sdlc-discipline.finalizer"
+    update_result = _reopen_bead_routed_to_finalizer(bead_id, finalizer_target, rig_root)
+    if update_result != 0:
+        return update_result
 
     print(f"rebase: reopened {bead_id} ({story_id}) routed to {finalizer_target}")
     print(f"  PR: {pr_url}")
