@@ -343,6 +343,20 @@ Stdlib-only Python (no `pyyaml` dependency). YAML frontmatter is hand-parsed for
 
 Stories complement the existing `commands/story-new/` (interactive single-story scaffold creates a bead directly). The bridge handles bulk filing from a pre-authored `stories/` directory; `story-new` handles one-off interactive creation when you don't want a markdown source file. Use whichever fits the moment.
 
+### Story lifecycle (canonical)
+
+```
+draft → ready → filed → (chain runs: worker → tester → reviewer
+                          → documenter → finalizer)
+                     → closed via `stories.py archive <id>`
+```
+
+The valid status set is `VALID_STATUSES = {draft, ready, filed, in-flight, merged, closed}` (defined at `stories.py:58`). The terminal state is `closed`, set by `stories.py archive`. The archive command also moves the spec file from `stories/` to `stories/_archive/` and writes the merge metadata (PR URL, SHA, closed-at timestamp) into the closing frontmatter block.
+
+**Do not in-place edit `status:` to `shipped`, `done`, or any other value outside the schema.** Such writes drift the spec away from the validator's expectation and accumulate across the rig over time. Pack #90 enforces this with a pre-commit hook (`assets/scripts/sdlc-validate-stories.sh`) and a finalizer self-audit gate that runs `stories.py validate` before merge. Pack #91 (this section) surfaces the convention where readers naturally look.
+
+If you find a spec carrying an out-of-schema status (e.g., `shipped`), the correct cleanup is to run `python3 stories.py archive <story-id> --pr <url> --sha <sha>` rather than rewriting the status in place.
+
 ## Differential gates (v2.4)
 
 The pack does not enforce a zero-error static-analysis ceiling. It enforces **anti-weakening**: the worker's branch must not introduce ruff or mypy errors, must not introduce suppression directives (`# type: ignore`, `# noqa`, `# pyright: ignore`), must not add `pytest.mark.skip`/`xfail`/`skipif` markers, and must not lose assertion counts in pre-existing test files. Pre-existing baseline noise is tolerated; weakening the branch to silence new failures is not.

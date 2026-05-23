@@ -722,7 +722,21 @@ def cmd_graph(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="stories",
-        description="SDLC story-graph bridge: stories/*.md <-> bd beads.",
+        description=(
+            "SDLC story-graph bridge: stories/*.md <-> bd beads.\n\n"
+            "Story lifecycle:\n"
+            "  draft → ready → filed → (chain runs: worker → tester → reviewer\n"
+            "                            → documenter → finalizer)\n"
+            "                       → closed via `stories.py archive <id>`\n\n"
+            "Status values come from VALID_STATUSES = {draft, ready, filed,\n"
+            "in-flight, merged, closed}. `closed` is the terminal — set by\n"
+            "the `archive` subcommand, which moves the spec to stories/_archive/\n"
+            "and records merge metadata. Do NOT in-place edit status to 'shipped'\n"
+            "or any out-of-schema value; the validator at stories.py:58 will\n"
+            "reject it and the pre-commit hook / chain self-audit (pack #90)\n"
+            "will block the commit or merge."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -742,7 +756,23 @@ def main() -> int:
     p_ready = sub.add_parser("ready", help="Show ready set joined with story-file paths.")
     p_ready.set_defaults(func=cmd_ready)
 
-    p_archive = sub.add_parser("archive", help="Move a closed story's file into _archive/.")
+    p_archive = sub.add_parser(
+        "archive",
+        help="Move a closed story's file into _archive/.",
+        description=(
+            "Move a closed spec to stories/_archive/.\n\n"
+            "This is the canonical terminal-state operation. After a chain ships\n"
+            "a story's PR, run `stories.py archive <story-id> --pr <url> --sha <sha>`\n"
+            "to set status: closed and record the merge metadata in the closing\n"
+            "block. Do NOT in-place edit the frontmatter to status: shipped or\n"
+            "status: done — those are not in VALID_STATUSES (stories.py:58) and\n"
+            "the validator + pre-commit hook (pack #90) will reject them.\n\n"
+            "Today this is operator-invoked: run `stories.py archive` after\n"
+            "a chain's PR merges. Future pack work may wire the finalizer to\n"
+            "call this automatically on glance_merge."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p_archive.add_argument("story_id", help="Story ID to archive (e.g., EL-014).")
     p_archive.add_argument("--pr", help="Merged PR URL to record in closing note.")
     p_archive.add_argument("--sha", help="Merged SHA to record in closing note.")

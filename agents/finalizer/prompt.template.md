@@ -221,6 +221,47 @@ EOF
 fi
 ```
 
+## Schema validation (pack issue #90)
+
+Before any merge decision, run `stories.py validate` via the wrapper script with the FORCE flag set. The validator checks every spec's frontmatter against `VALID_STATUSES = {draft, ready, filed, in-flight, merged, closed}` and the other invariants the bridge enforces (story_id present, dependencies resolve, sensitive_files match the rig's architecture.toml). A spec with an out-of-schema status that reaches this phase means either the worker or documenter wrote it during the chain run; merging would propagate the schema drift to main.
+
+If validation fails, park the PR for operator review and exit without merging. Same shape as the rubric safety-floor below.
+
+```bash
+VALIDATE_OUT=$(mktemp)
+if ! SDLC_VALIDATE_STORIES_FORCE=1 bash "$RIG_PACK/assets/scripts/sdlc-validate-stories.sh" > "$VALIDATE_OUT" 2>&1; then
+    gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
+## Finalizer aborted — schema validation failed
+
+\`stories.py validate\` reported errors before the auto-merge gate. The chain
+produced spec frontmatter that violates the schema (see \`VALID_STATUSES\` at
+\`stories.py:58\`). Merging would propagate the drift to main.
+
+Validator output:
+
+\`\`\`
+$(cat "$VALIDATE_OUT")
+\`\`\`
+
+Fix the offending spec(s) on this branch (or via direct main commit if the
+fix is general) and re-run the finalizer, or close this PR and re-sling
+the story after the schema is correct.
+EOF
+)"
+    bd update $STORY_ID \
+      --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+      --set-metadata final_state="pr_open_for_human" \
+      --set-metadata sdlc_validate_failed=true
+    bd close $STORY_ID --reason "stories.py validate failed; queued for human review"
+    gc runtime drain-ack
+    exit
+fi
+```
+
+The validator runs unconditionally on the FORCE path (the chain's self-audit context, not the pre-commit-hook context). Failure is the only branch that exits early; success continues to the auto-merge gate.
+
+Closes pack #90.
+
 ## Auto-merge gate
 
 The merge decision is a function of three inputs:

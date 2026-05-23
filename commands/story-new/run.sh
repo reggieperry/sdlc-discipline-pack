@@ -7,6 +7,20 @@
 #
 # Run from inside the rig directory (so bd create files the bead in the
 # correct rig's beads database).
+#
+# Story lifecycle (canonical):
+#   draft → ready → filed → (chain runs: worker → tester → reviewer
+#                              → documenter → finalizer)
+#                          → closed via `stories.py archive <id>`
+#
+# This script creates a bead DIRECTLY (one-off interactive flow); the bead's
+# lifecycle is then tracked via bd. For the file-based flow (where a
+# stories/EL-NNN-*.md spec drives the chain), see stories.py — the bridge
+# tool that translates files to beads and back. Both flows converge at the
+# same terminal state: `closed` via `stories.py archive`, which moves the
+# spec file to stories/_archive/ and records the merge metadata. Do not
+# in-place edit `status: shipped` or any out-of-schema value; the validator
+# at stories.py:58 will reject it (pack #90).
 
 set -euo pipefail
 
