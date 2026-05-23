@@ -265,7 +265,7 @@ self_audit_rules:
   - function_body_length
 ```
 
-v2.27.0 ships one checker (`function_body_length`). Additional checkers (`underscored_cross_module_imports`, `public_name_count_per_module`) are deferred to follow-on releases. The framework accepts any rule whose script lives at `$RIG_PACK/assets/scripts/sdlc-rule-checks/<rule>.py` and follows the `--diff-range REF..REF → exit-0-or-1` contract.
+v2.27.0 shipped `function_body_length`. v2.30 adds `deferred_work_prose` — flags `# TODO`, `# FIXME`, `# Removal in vX`, `# follow-up`, etc., comments lacking a tracking reference (`#NNN`, `EL-NNN`, or `el-xxx`) within ±2 lines. Opt-out via `# noqa: deferred-work`. Additional checkers (`underscored_cross_module_imports`, `public_name_count_per_module`) are deferred to follow-on releases. The framework accepts any rule whose script lives at `$RIG_PACK/assets/scripts/sdlc-rule-checks/<rule>.py` and follows the `--diff-range REF..REF → exit-0-or-1` contract.
 
 ## Discipline rules auto-load
 
