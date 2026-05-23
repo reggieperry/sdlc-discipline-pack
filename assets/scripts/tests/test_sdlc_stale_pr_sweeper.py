@@ -267,12 +267,8 @@ class SweeperReconciliationTests(unittest.TestCase):
 
 
 class FeatureGateTests(unittest.TestCase):
-    """v2.29.9 env-var rename: SDLC_SWEEPER_ENABLED → SDLC_STALE_PR_SWEEPER_ENABLED.
-
-    Pins the gate's three branches: new name disables, legacy name still
-    disables (with stderr warning), new name wins when both are set.
-    Mirrors the v2.29.4 rebase-watcher gate tests.
-    """
+    """v2.30 removed the SDLC_SWEEPER_ENABLED legacy fallback that v2.29.9 had
+    shipped as a one-release deprecation. Only the new name remains."""
 
     def _invoke(self, tmp: Path, env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
         """Invoke the sweeper inside the caller's tmpdir so post-conditions
@@ -293,7 +289,6 @@ class FeatureGateTests(unittest.TestCase):
         }
         # Strip whatever the parent shell might have set so the test env is hermetic.
         env.pop("SDLC_STALE_PR_SWEEPER_ENABLED", None)
-        env.pop("SDLC_SWEEPER_ENABLED", None)
         env.update(env_overrides)
         (tmp / "city").mkdir(parents=True, exist_ok=True)
         return subprocess.run(
@@ -304,49 +299,26 @@ class FeatureGateTests(unittest.TestCase):
             timeout=10,
         )
 
-    def test_new_name_false_disables(self) -> None:
+    def test_false_disables(self) -> None:
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             result = self._invoke(tmp, {"SDLC_STALE_PR_SWEEPER_ENABLED": "false"})
 
             self.assertEqual(result.returncode, 0)
-            self.assertNotIn("deprecated", result.stderr)
             # Pin: the gate fired before any peer binary was invoked.
             self.assertFalse(
                 (tmp / "gc-argv.log").exists(),
                 f"gc should not be called when gate disabled; gc-argv.log present: {tmp / 'gc-argv.log'}",
             )
 
-    def test_legacy_name_false_still_disables_with_warning(self) -> None:
-        """v2.29.9 backward-compat: SDLC_SWEEPER_ENABLED=false still gates the
-        sweeper off, AND a stderr warning fires telling the operator to migrate."""
+    def test_default_true_enables(self) -> None:
+        """Default behavior: when the gate var is unset, the sweeper's
+        gate-default is true and the script reaches gc rig list."""
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            result = self._invoke(tmp, {"SDLC_SWEEPER_ENABLED": "false"})
+            result = self._invoke(tmp, {})
 
             self.assertEqual(result.returncode, 0)
-            self.assertIn("SDLC_SWEEPER_ENABLED is deprecated", result.stderr)
-            self.assertIn("SDLC_STALE_PR_SWEEPER_ENABLED", result.stderr)
-            # Pin: legacy gate-disable also short-circuits before peer binaries.
-            self.assertFalse(
-                (tmp / "gc-argv.log").exists(),
-                "legacy var should still disable; gc-argv.log unexpectedly present",
-            )
-
-    def test_new_name_wins_when_both_set(self) -> None:
-        """Precedence pin: legacy=false but new=true → gate passes (no warning)."""
-        with TemporaryDirectory() as tmp_str:
-            tmp = Path(tmp_str)
-            result = self._invoke(
-                tmp, {"SDLC_STALE_PR_SWEEPER_ENABLED": "true", "SDLC_SWEEPER_ENABLED": "false"}
-            )
-
-            # Gate passes; the script reaches the city-root step and exits with no rigs.
-            self.assertEqual(result.returncode, 0)
-            # Warning should NOT fire — new var is set, so the legacy fallback
-            # branch isn't entered.
-            self.assertNotIn("deprecated", result.stderr)
-            # Pin: gate-passed branch DID reach gc.
             self.assertTrue(
                 (tmp / "gc-argv.log").exists(),
                 "gate-passed path should reach gc; gc-argv.log missing",
