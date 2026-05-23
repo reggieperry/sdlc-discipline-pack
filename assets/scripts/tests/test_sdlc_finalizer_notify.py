@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from _spies import _write_executable, spy_msmtp
+from _spies import spy_msmtp, write_executable
 
 WRAPPER_PATH = Path(__file__).resolve().parent.parent / "sdlc-finalizer-notify.sh"
 NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
@@ -48,7 +48,7 @@ def stub_bd_with_title(tmp: Path, *, title: str) -> Path:
         exit 0
         """
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 

@@ -16,12 +16,13 @@ Run with:
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from _spies import write_executable
 
 WRAPPER_PATH = Path(__file__).resolve().parent.parent / "sdlc-claude-with-retry.sh"
 CLAUDE_RETRY_PATH = (
@@ -33,12 +34,6 @@ CLAUDE_RETRY_PATH = (
     / "sdlc-discipline"
     / "claude_retry.py"
 )
-
-
-def _write_executable(path: Path, body: str) -> None:
-    """Write a shell script and chmod it executable."""
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _fake_claude(tmp: Path, *, exit_code: int = 0) -> Path:
@@ -55,7 +50,7 @@ def _fake_claude(tmp: Path, *, exit_code: int = 0) -> Path:
         exit {exit_code}
         """
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -77,7 +72,7 @@ def _fake_claude_writes_log(tmp: Path, *, exit_code: int = 0, log_event: str) ->
         exit {exit_code}
         """
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -114,7 +109,7 @@ def _fake_bd_step_sequence(tmp: Path, *, steps: list[str]) -> Path:
         exit 0
         """
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -141,7 +136,7 @@ def _fake_bd_with_step(tmp: Path, *, current_step: str) -> Path:
         exit 0
         """
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -666,8 +661,7 @@ def _fake_claude_retry_py(tmp: Path) -> Path:
         sys.exit(0)
         """
     )
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    write_executable(path, body)
     return path
 
 
