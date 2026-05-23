@@ -266,6 +266,55 @@ The validator runs unconditionally on the FORCE path (the chain's self-audit con
 
 Closes pack #90.
 
+## Scope-drift audit (pack issue #83 Prong 2)
+
+The reviewer phase audits acceptance criteria → implementation. The complementary direction — implementation → criteria, flagging diff entries that no criterion or scope statement accounts for — is not in the reviewer's prompt and (more importantly) cannot be there: the reviewer runs before the documenter, and Category B residue from documenter or finalizer is added to the branch after the reviewer's PASS commit. The finalizer runs LAST, so the cumulative diff against `origin/$TARGET` is the only place a complete-coverage scope check can fire.
+
+The audit reads the plan file's `**In:**` backticked paths and matches them against `git diff --name-only origin/$TARGET...HEAD`. Files in the diff that match nothing in the In list are flagged as scope drift. Fail-open semantics on a missing plan or a prose-only `**In:**` section — better to miss drift than to noise-flag PRs whose plans don't carry machine-readable paths.
+
+The gate is opt-out via `SDLC_SCOPE_DRIFT_AUDIT_ENABLED=false` (default `true`). Mirrors the schema-validation gate's polarity.
+
+```bash
+if [ "${SDLC_SCOPE_DRIFT_AUDIT_ENABLED:-true}" = "true" ]; then
+    PLAN_FILE_PATH=$(bd show $STORY_ID --json | jq -r '.[0].metadata.plan_file // empty')
+    if [ -n "$PLAN_FILE_PATH" ] && [ -f "$PLAN_FILE_PATH" ]; then
+        SCOPE_DRIFT_OUT=$(mktemp)
+        if ! bash "$RIG_PACK/assets/scripts/sdlc-scope-drift-audit.sh" \
+            --plan "$PLAN_FILE_PATH" --target "$TARGET" > "$SCOPE_DRIFT_OUT" 2>&1; then
+            gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
+## Scope drift detected
+
+The PR's cumulative diff against \`origin/$TARGET\` includes file(s) not
+covered by the plan's \`**In:**\` scope list. Common cause: Category B
+residue from a chain phase committing changes beyond its stated job. The
+finalizer runs LAST so it catches drift regardless of which phase
+introduced it.
+
+Files outside scope:
+
+\`\`\`
+$(cat "$SCOPE_DRIFT_OUT")
+\`\`\`
+
+Either (a) the plan's \`**In:**\` list is incomplete and should be
+amended on this branch, or (b) the out-of-scope files should be removed
+from the diff. Re-run the finalizer after the branch matches the plan.
+EOF
+)"
+            bd update $STORY_ID \
+              --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
+              --set-metadata final_state="pr_open_for_human" \
+              --set-metadata scope_drift_detected=true
+            bd close $STORY_ID --reason "scope drift detected against plan's **In:** list; queued for human review"
+            gc runtime drain-ack
+            exit
+        fi
+    fi
+fi
+```
+
+Closes pack #83 Prong 2.
+
 ## Auto-merge gate
 
 The merge decision is a function of three inputs:
