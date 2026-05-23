@@ -28,8 +28,9 @@ WRAPPER_PATH = Path(__file__).resolve().parent.parent / "sdlc-finalizer-notify.s
 NOTIFY_PATH = Path(__file__).resolve().parent.parent / "sdlc-notify.sh"
 
 
-def _fake_bd_with_title(tmp: Path, *, title: str) -> Path:
-    """Build a fake `bd` whose `bd show <id> --json` returns the canned title.
+def stub_bd_with_title(tmp: Path, *, title: str) -> Path:
+    """Build a Test Stub for `bd` whose `bd show <id> --json` returns the
+    canned title and exits 0. No argv recording — Stub, not Spy per Meszaros.
 
     Stays here (not in `_spies.py`) because no other test file currently
     needs this exact shape. Lift to `_spies.py` when a second consumer
@@ -67,7 +68,7 @@ class FinalizerNotifySubjectTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             spy_msmtp(tmp)
-            _fake_bd_with_title(tmp, title="Decision audit trail")
+            stub_bd_with_title(tmp, title="Decision audit trail")
 
             env = {
                 **os.environ,
@@ -134,7 +135,7 @@ class FinalizerNotifyBodyTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             spy_msmtp(tmp)
-            _fake_bd_with_title(tmp, title="Decision audit trail")
+            stub_bd_with_title(tmp, title="Decision audit trail")
 
             env = {
                 **os.environ,
@@ -205,7 +206,7 @@ class FinalizerNotifyTypeTests(unittest.TestCase):
         of intent.
         """
         spy_msmtp(tmp)
-        _fake_bd_with_title(tmp, title="Decision audit trail")
+        stub_bd_with_title(tmp, title="Decision audit trail")
         env = {
             **os.environ,
             "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",

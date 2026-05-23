@@ -32,6 +32,14 @@ this one. `_write_executable` now lives here directly (no re-export
 hop); `_fake_msmtp` was renamed `spy_msmtp` per Meszaros's Test Spy
 vocabulary. Underscore-prefix exports keep unittest discovery clean.
 
+Justified aggregate (modularity.md item 11). The module exports more
+than 7 public names — currently 13 spy factories plus the underscore-
+prefixed `_write_executable` utility — but every export shares one
+abstraction: a factory ``(tmp_dir, ...) → Path`` that writes a recording-
+spy shell script under the tempdir. The count tracks the surface of
+the gc / bd / gh / python3 / notify / msmtp peers the pack's shell
+scripts touch; growth is bounded by that peer set, not by drift.
+
 Convention: every factory takes the tempdir as its first positional arg,
 writes the spy script under it, and returns the Path to the spy. The
 caller is responsible for putting the tempdir on $PATH (or threading
