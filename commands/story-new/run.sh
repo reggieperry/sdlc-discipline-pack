@@ -77,12 +77,22 @@ fi
 
 DESCRIPTION=$(cat "$TEMP_FILE")
 
+# Build metadata as a single JSON document. bd create accepts --metadata <JSON>;
+# the older --set-metadata key=value form was removed from bd's CLI surface.
+# Three fields here (true/false strings + a branch name) carry no JSON-unsafe
+# characters in normal operation, so direct interpolation is safe. If a future
+# field can contain quotes or backslashes, switch to a python3 -c json.dumps
+# shim.
+if [ -n "$GLANCE_MERGE" ]; then
+  METADATA_JSON="{\"open_pr\":\"$OPEN_PR\",\"base_branch\":\"$BASE_BRANCH\",\"glance_merge\":\"$GLANCE_MERGE\"}"
+else
+  METADATA_JSON="{\"open_pr\":\"$OPEN_PR\",\"base_branch\":\"$BASE_BRANCH\"}"
+fi
+
 # bd create the story with metadata.
 BEAD_ID=$(bd create "$TITLE" \
   --description "$DESCRIPTION" \
-  --set-metadata "open_pr=$OPEN_PR" \
-  --set-metadata "base_branch=$BASE_BRANCH" \
-  ${GLANCE_MERGE:+--set-metadata "glance_merge=$GLANCE_MERGE"} \
+  --metadata "$METADATA_JSON" \
   2>&1 | grep -oE '[a-z]{2}-[a-z0-9]+' | head -1)
 
 [ -z "$BEAD_ID" ] && { echo "bd create failed; check rig dir + beads provider" >&2; exit 1; }
