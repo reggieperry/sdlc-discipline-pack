@@ -110,10 +110,41 @@ sweep_rig() {
         mergeable=$(echo "$pr_state" | jq -r '.mergeStateStatus // empty')
         state=$(echo "$pr_state" | jq -r '.state // empty')
 
-        # PR must still be open. Closed/merged PRs are not actionable here
-        # but should not be left forever in pr_open_for_human — the bead's
-        # metadata is stale. The sweeper leaves the bead alone; a separate
-        # bead-metadata-reconciler would be the right place to clean those.
+        # PR closed-without-merge: bead stays in pr_open_for_human until an
+        # operator triages it. Sweeper has nothing actionable on this path.
+        if [ "$state" = "CLOSED" ]; then
+            continue
+        fi
+
+        # PR merged externally (human ran `gh pr merge` on a tier that the
+        # finalizer parked — review_encouraged or human_required). The
+        # finalizer never sees the merge event; without this reconciler the
+        # bead stays at final_state=pr_open_for_human forever, the
+        # rebase-watcher's `final_state=merged` path is dead for the most
+        # common case, and the sweeper continues to call `gh pr view`
+        # against this bead on every 5-min tick (bounded waste).
+        #
+        # Reconcile by promoting the bead to final_state=merged with the
+        # observed timestamp + SHA. Closes #39 (Option A: sweeper-side side
+        # effect; the sweeper is already iterating these beads with the gh
+        # data in hand, so the cost is one extra bd update per merge event
+        # — no new cron order, no new infrastructure).
+        if [ "$state" = "MERGED" ]; then
+            local merged_pr_state merged_at merged_sha
+            merged_pr_state=$(cd "$rig_root" && gh pr view "$pr_number" --json mergedAt,mergeCommit 2>/dev/null || echo "")
+            merged_at=$(echo "$merged_pr_state" | jq -r '.mergedAt // empty')
+            merged_sha=$(echo "$merged_pr_state" | jq -r '.mergeCommit.oid // empty')
+            echo "sweeper: PR #$pr_number ($story_id) merged externally; reconciling bead metadata (final_state=merged)" >&2
+            cd "$rig_root" && bd update "$story_id" \
+                --set-metadata "final_state=merged" \
+                ${merged_at:+--set-metadata "final_merged_at=$merged_at"} \
+                ${merged_sha:+--set-metadata "final_merged_sha=$merged_sha"} \
+                >/dev/null 2>&1 || true
+            continue
+        fi
+
+        # Any other non-OPEN state (race conditions, unexpected gh values).
+        # Leave the bead alone; the next tick gets another shot.
         [ "$state" != "OPEN" ] && continue
 
         case "$mergeable" in
