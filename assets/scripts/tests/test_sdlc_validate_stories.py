@@ -15,20 +15,16 @@ Run with:
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import textwrap
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from _spies import write_executable
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "sdlc-validate-stories.sh"
 assert SCRIPT_PATH.exists(), f"sdlc-validate-stories.sh not found at {SCRIPT_PATH}"
-
-
-def _write_executable(path: Path, body: str) -> None:
-    path.write_text(body)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _make_rig(tmp: Path, bridge_exit: int = 0, bridge_stdout: str = "") -> None:
@@ -52,7 +48,7 @@ def _make_rig(tmp: Path, bridge_exit: int = 0, bridge_stdout: str = "") -> None:
         sys.exit({bridge_exit})
         """
     )
-    _write_executable(bridge, bridge_body)
+    write_executable(bridge, bridge_body)
 
     # Initialize a git repo so the staged-diff gate has something to query.
     subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)

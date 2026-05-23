@@ -28,17 +28,24 @@ shape is sufficiently narrow that the consolidation cost isn't yet
 justified per Rule of Three.
 
 v2.29.8 (issue #113) collapsed the previous `_helpers.py` module into
-this one. `_write_executable` now lives here directly (no re-export
+this one. `write_executable` now lives here directly (no re-export
 hop); `_fake_msmtp` was renamed `spy_msmtp` per Meszaros's Test Spy
 vocabulary. Underscore-prefix exports keep unittest discovery clean.
 
 Justified aggregate (modularity.md item 11). The module exports more
-than 7 public names — currently 13 spy factories plus the underscore-
-prefixed `_write_executable` utility — but every export shares one
-abstraction: a factory ``(tmp_dir, ...) → Path`` that writes a recording-
-spy shell script under the tempdir. The count tracks the surface of
-the gc / bd / gh / python3 / notify / msmtp peers the pack's shell
-scripts touch; growth is bounded by that peer set, not by drift.
+than 7 public names — currently 13 spy factories plus the
+`write_executable` utility — but every export shares one abstraction:
+a factory ``(tmp_dir, ...) → Path`` that writes a recording-spy shell
+script under the tempdir. The count tracks the surface of the gc / bd /
+gh / python3 / notify / msmtp peers the pack's shell scripts touch;
+growth is bounded by that peer set, not by drift.
+
+v2.30.1 (issue #135) renamed `_write_executable` → `write_executable` —
+the function has cross-file consumers, so the leading underscore (which
+signals pack-internal by Python convention) was inaccurate. Two inline
+copies in `test_sdlc_validate_stories.py` and `test_sdlc_claude_with_retry.py`
+migrated to import from this module in the same pass, closing the
+Rule-of-Three breach v2.30's deep-reasoning evaluation flagged.
 
 Convention: every factory takes the tempdir as its first positional arg,
 writes the spy script under it, and returns the Path to the spy. The
@@ -60,7 +67,7 @@ import subprocess
 from pathlib import Path
 
 
-def _write_executable(path: Path, body: str) -> None:
+def write_executable(path: Path, body: str) -> None:
     """Write a shell script and chmod it executable.
 
     The chmod adds u+x, g+x, o+x while preserving the existing mode bits.
@@ -72,7 +79,7 @@ def _write_executable(path: Path, body: str) -> None:
 
 
 __all__ = [
-    "_write_executable",
+    "write_executable",
     "spy_gc_rig_list",
     "spy_gc_with_session_dispatch",
     "spy_gc_with_bd_show",
@@ -106,7 +113,7 @@ def spy_gc_rig_list(tmp: Path, rig_list_json: str) -> Path:
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -162,7 +169,7 @@ def spy_gc_with_session_dispatch(
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -221,7 +228,7 @@ def spy_gc_with_bd_show(
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -244,7 +251,7 @@ def spy_gc_cities(tmp: Path, cities_output: str = "") -> Path:
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -268,7 +275,7 @@ def spy_bd_list(tmp: Path, list_response: str = "[]") -> Path:
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -327,7 +334,7 @@ def spy_bd_dispatch(tmp: Path, bead_responses: dict[str, str]) -> Path:
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -348,7 +355,7 @@ def spy_gh_pr_list(tmp: Path, pr_list_response: str = "[]") -> Path:
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -384,7 +391,7 @@ def spy_gh_pr_view(tmp: Path, pr_responses: dict[int, str]) -> Path:
         "fi\n"
         "exit 0\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -412,7 +419,7 @@ def spy_python3_stories_archive(tmp: Path, archive_exit: int = 0) -> Path:
         "done\n"
         f'exec "{real_python}" "$@"\n'
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -438,7 +445,7 @@ def spy_python3_stories_passthrough(tmp: Path) -> Path:
         "# Fallback: dispatch to the real python3 for anything else.\n"
         'exec /usr/bin/python3 "$@"\n'
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -454,7 +461,7 @@ def spy_notify(tmp: Path) -> Path:
     pack_assets_scripts.mkdir(parents=True, exist_ok=True)
     path = pack_assets_scripts / "sdlc-notify.sh"
     body = f'#!/bin/bash\necho "$@" >> "{tmp}/notify-argv.log"\nexit 0\n'
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -479,7 +486,7 @@ def spy_msmtp(tmp: Path, *, exit_code: int = 0) -> Path:
         f'cat >> "{tmp}/msmtp-stdin.log"\n'
         f"exit {exit_code}\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path
 
 
@@ -506,5 +513,5 @@ def spy_recorder(tmp: Path, name: str, *, exit_code: int = 0) -> Path:
         f'cat >> "{tmp}/{name}-stdin.log" 2>/dev/null || true\n'
         f"exit {exit_code}\n"
     )
-    _write_executable(path, body)
+    write_executable(path, body)
     return path

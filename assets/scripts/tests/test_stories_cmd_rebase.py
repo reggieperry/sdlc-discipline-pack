@@ -158,6 +158,121 @@ class CmdRebaseCharacterizationTests(unittest.TestCase):
             if bd_log_path.exists():
                 self.assertNotIn("update", bd_log_path.read_text())
 
+    def test_multiple_matching_beads_exits_1_with_ambiguous_message(self) -> None:
+        """Two closed beads with the same metadata.story_id → ambiguous; exit 1
+        without picking. The operator must disambiguate via bd manually.
+
+        Pins the `_find_unique_closed_bead` helper's second error branch:
+        `len(matching) > 1`.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            rig_root = _setup_rig_root(tmp)
+            fakes_dir = tmp / "fakes"
+            fakes_dir.mkdir()
+
+            bead_a = _bead_record("el-1", "EL-001")
+            bead_b = _bead_record("el-2", "EL-001")  # Same story_id, different bead ID
+            spy_bd_dispatch(fakes_dir, {"list": json.dumps([bead_a, bead_b])})
+            spy_gh_pr_view(fakes_dir, {})
+
+            result = _invoke_rebase(rig_root, fakes_dir, "EL-001")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("multiple closed beads", result.stderr)
+            self.assertIn("el-1", result.stderr)
+            self.assertIn("el-2", result.stderr)
+            self.assertIn("pick the bead manually", result.stderr)
+            # Neither bead should have been updated.
+            bd_log_path = fakes_dir / "bd-argv.log"
+            if bd_log_path.exists():
+                self.assertNotIn("update", bd_log_path.read_text())
+
+    def test_gh_pr_view_failure_forwards_exit_code(self) -> None:
+        """gh pr view exits non-zero → cmd_rebase forwards the gh exit and stops.
+
+        Pins the `_check_pr_still_open` helper's subprocess-failure branch.
+        We simulate the gh failure by writing an explicit fake gh that exits 1
+        rather than spy_gh_pr_view's silent-pass — spy_gh_pr_view always exits 0.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            rig_root = _setup_rig_root(tmp)
+            fakes_dir = tmp / "fakes"
+            fakes_dir.mkdir()
+
+            bead = _bead_record("el-1", "EL-001")
+            spy_bd_dispatch(fakes_dir, {"list": json.dumps([bead])})
+
+            # Direct-write a failing fake gh (spy factories don't have an
+            # exit-N variant for gh today; could be a future _spies.py extension).
+            from _spies import write_executable
+
+            gh_path = fakes_dir / "gh"
+            gh_body = (
+                "#!/bin/bash\n"
+                f'echo "$@" >> "{fakes_dir}/gh-argv.log"\n'
+                'echo "gh: simulated upstream failure" >&2\n'
+                "exit 1\n"
+            )
+            write_executable(gh_path, gh_body)
+
+            result = _invoke_rebase(rig_root, fakes_dir, "EL-001")
+
+            self.assertNotEqual(result.returncode, 0, "gh failure must forward exit code")
+            self.assertIn("gh pr view", result.stderr)
+            bd_log_path = fakes_dir / "bd-argv.log"
+            if bd_log_path.exists():
+                self.assertNotIn("update", bd_log_path.read_text())
+
+    def test_bd_update_failure_forwards_exit_code(self) -> None:
+        """bd update exits non-zero → cmd_rebase forwards the bd exit. Pins the
+        `_reopen_bead_routed_to_finalizer` helper's subprocess-failure branch.
+
+        The setup uses a custom fake bd that returns a normal `bd list` payload
+        but fails on `bd update`. spy_bd_dispatch's update branch silently
+        succeeds, so a custom fake is required to exercise the failure shape.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            rig_root = _setup_rig_root(tmp)
+            fakes_dir = tmp / "fakes"
+            fakes_dir.mkdir()
+
+            bead = _bead_record("el-1", "EL-001")
+            bead_json = json.dumps([bead])
+
+            from _spies import write_executable
+
+            bd_path = fakes_dir / "bd"
+            bd_body = (
+                "#!/bin/bash\n"
+                f'echo "$@" >> "{fakes_dir}/bd-argv.log"\n'
+                'if [ "$1" = "-C" ]; then shift 2; fi\n'
+                'if [ "$1" = "list" ]; then\n'
+                "    cat <<'__BD_LIST_EOF__'\n"
+                f"{bead_json}\n"
+                "__BD_LIST_EOF__\n"
+                "    exit 0\n"
+                "fi\n"
+                'if [ "$1" = "update" ]; then\n'
+                '    echo "bd update: simulated upstream failure" >&2\n'
+                "    exit 7\n"
+                "fi\n"
+                "exit 0\n"
+            )
+            write_executable(bd_path, bd_body)
+            spy_gh_pr_view(fakes_dir, {42: json.dumps({"state": "OPEN"})})
+
+            result = _invoke_rebase(rig_root, fakes_dir, "EL-001")
+
+            self.assertEqual(result.returncode, 7, "bd update exit must forward verbatim")
+            self.assertIn("bd update", result.stderr)
+            # Verify bd update was invoked — the failure forwards from this call,
+            # not from an earlier branch.
+            bd_log = (fakes_dir / "bd-argv.log").read_text()
+            self.assertIn("update el-1", bd_log)
+
 
 if __name__ == "__main__":
     unittest.main()

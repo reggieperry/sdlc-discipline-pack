@@ -135,6 +135,13 @@ if [ -n "$AUDIT_DOC" ] && [ -f "$AUDIT_DOC" ]; then
   echo "reviewer: cross-checking spec coverage against audit doc at $AUDIT_DOC"
   # Read the audit doc and enumerate named identifiers (file paths, function names,
   # line ranges) the audit flagged in the area the spec claims to address.
+elif [ -n "$AUDIT_DOC" ]; then
+  # v2.30.1 (issue #137): source_audit_doc was declared but the file isn't readable.
+  # Surface the path-resolution failure rather than silently falling through — the
+  # silent-skip path produces the same "no findings" outcome as a present file with
+  # full coverage, exactly the non-discriminating-outcome shape slop-reviewer
+  # category 6 catches. Operators see this in the bead's reviewer log.
+  echo "reviewer: metadata.source_audit_doc='$AUDIT_DOC' but file not readable; skipping audit-doc cross-check" >&2
 fi
 ```
 
