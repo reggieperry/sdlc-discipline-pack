@@ -1,0 +1,5 @@
+[order]
+description = "Periodic story-spec drift reconciler (pack #92). For each registered rig, walks stories/EL-*.md frontmatter against merged PR + bead state; specs whose work has shipped on main but whose frontmatter says otherwise are HIGH-confidence zombies. HIGH-confidence detection uses two signals: (1) a closed bead with metadata.story_id == spec.story_id and final_state in {merged, branch_ready_no_pr}; (2) a merged PR whose branch is feature/<filed_as_bead> when the spec's filed_as_bead is non-empty, or whose title contains the literal story_id. On HIGH match, invokes stories.py archive with the matched PR URL + SHA. MEDIUM/LOW confidence handling is deferred to a follow-on; today's v1 reconciler is HIGH-only and fail-open on weak signals. Defaults OFF — enable via SDLC_ZOMBIE_RECONCILER_ENABLED=true in the supervisor's env. Notifies via sdlc-notify.sh on every archive."
+trigger = "cooldown"
+interval = "24h"
+exec = "$PACK_DIR/assets/scripts/sdlc-zombie-reconciler.sh"
