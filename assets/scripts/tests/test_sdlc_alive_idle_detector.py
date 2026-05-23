@@ -437,6 +437,21 @@ class ActionTests(unittest.TestCase):
             "notify should fire on successful nudge",
         )
 
+        # Pack #102 audit-trail — successful nudge writes per-bead
+        # `alive_idle_nudge_count` + `alive_idle_last_nudge_at` so the
+        # operator can grep `bd show <id> --json` for ever-nudged beads.
+        # First nudge on this bead → count becomes 1.
+        self.assertIn(
+            "alive_idle_nudge_count=1",
+            gc_calls,
+            f"missing alive_idle_nudge_count=1 metadata write; gc_calls=\n{gc_calls}",
+        )
+        self.assertIn(
+            "alive_idle_last_nudge_at=",
+            gc_calls,
+            f"missing alive_idle_last_nudge_at timestamp; gc_calls=\n{gc_calls}",
+        )
+
     def test_submit_failure_notifies_and_exits_nonzero(self) -> None:
         tmp = Path(self._tmp_str)
         bead = _bead(bead_id="el-stuck")

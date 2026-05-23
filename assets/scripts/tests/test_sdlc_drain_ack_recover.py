@@ -489,6 +489,16 @@ class HappyPathTests(unittest.TestCase):
                 joined,
                 f"step 5 (supervisor reload) missing; call sequence was:\n{joined}",
             )
+            # Pack #102 audit-trail — drain-ack recovery writes a per-bead
+            # `drain_ack_recovery_at` timestamp BEFORE step 1 so operators
+            # can grep `bd show <id> --json` for chains ever drain-ack-
+            # recovered. Failure here doesn't abort the recipe; this test
+            # pins the write happens on the happy path.
+            self.assertIn(
+                "drain_ack_recovery_at=",
+                joined,
+                f"missing drain_ack_recovery_at metadata write; call sequence was:\n{joined}",
+            )
 
             # Order check
             indices = {
@@ -501,7 +511,11 @@ class HappyPathTests(unittest.TestCase):
                     -1,
                 ),
                 "update": next(
-                    (i for i, c in enumerate(sequence) if "bd --rig" in c and "update" in c),
+                    (
+                        i
+                        for i, c in enumerate(sequence)
+                        if "bd --rig" in c and "update" in c and "--assignee" in c
+                    ),
                     -1,
                 ),
                 "kill": next(
@@ -621,10 +635,13 @@ class FailClosedTests(unittest.TestCase):
                 "push failure should send an alert",
             )
             sequence = (tmp / "call-sequence.log").read_text()
+            # Step-3 bd update (the assignee-clear) must not run after push
+            # failure. The pre-step audit-trail metadata write (pack #105,
+            # `drain_ack_recovery_at=`) runs BEFORE step 1 and is allowed.
             self.assertNotIn(
-                "bd --rig elder update",
+                "--assignee",
                 sequence,
-                f"bd update must not run after push failure; got:\n{sequence}",
+                f"step-3 bd update (--assignee) must not run after push failure; got:\n{sequence}",
             )
 
     def test_bd_update_failure_exits_5_alerts_and_skips_remaining_steps(self) -> None:

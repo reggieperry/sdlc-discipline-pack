@@ -154,6 +154,24 @@ if [ -z "$PHASE" ]; then
     PHASE="implementor"
 fi
 
+# --- Step 0: record recovery start ---
+# Audit-trail improvement (pack #105) — writes a per-bead timestamp the
+# operator can grep to identify drain-ack-recovered chains after the
+# fact. Best-effort: failure here doesn't abort the recipe. The field
+# value carries an ISO timestamp; on double emission (idempotent re-run)
+# the timestamp updates to the latest attempt, which is fine for the
+# "did this bead ever drain-ack-recover" audit shape.
+DRAIN_ACK_TS=$(date -Iseconds)
+if [ -n "$RIG" ] && [ "$RIG" != "-" ]; then
+    "$GC_BIN" bd --rig "$RIG" update "$BEAD_ID" \
+        --set-metadata "drain_ack_recovery_at=$DRAIN_ACK_TS" \
+        >/dev/null 2>&1 || true
+else
+    "$GC_BIN" bd update "$BEAD_ID" \
+        --set-metadata "drain_ack_recovery_at=$DRAIN_ACK_TS" \
+        >/dev/null 2>&1 || true
+fi
+
 # --- Step 1: commit ---
 # sdlc-stall-recover.sh exits 3 ("nothing to commit after exclusions") when
 # the worktree is already clean. That's the idempotent re-emission case —

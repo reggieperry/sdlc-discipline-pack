@@ -447,6 +447,61 @@ class WrapperMetadataTests(unittest.TestCase):
                 f"clean recovery should not record exhausted state; got:\n{updates}",
             )
 
+    def test_records_exit_history_entry_on_retry(self) -> None:
+        """Pack #105 audit-trail — every retry decision appends to
+        `<template>.exit_history`. Without this, in-process retries that
+        succeed leave no durable trace; `worker.attempt_n > 1` is the
+        only signal and it overwrites per attempt.
+
+        The expected entry shape is `<ISO-ts>~retry~<cause>`, multi-entry
+        joined by `|`. Test asserts a `bd update` call carrying the
+        `worker.exit_history=` key with a `~retry~turn_cap` substring."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            session_log = tmp / "session.jsonl"
+            _fake_claude_writes_log(
+                tmp,
+                exit_code=0,
+                log_event='{"type":"system","subtype":"turn_duration","durationMs":1}',
+            )
+            _fake_bd_step_sequence(tmp, steps=["implement", "read-diff"])
+
+            env = {
+                **os.environ,
+                "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
+                "STORY_ID": "el-fake",
+                "SDLC_TEMPLATE": "worker",
+                "CLAUDE_RETRY_PY": str(CLAUDE_RETRY_PATH),
+                "SDLC_CLAUDE_SESSION_LOG": str(session_log),
+                "SDLC_RETRY_SLEEP_OVERRIDE": "0",
+            }
+            result = subprocess.run(
+                [
+                    str(WRAPPER_PATH),
+                    "--print",
+                    "--session-id",
+                    "47c96142-fake-fake-fake-fakefakefake",
+                    "hello",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            updates = (tmp / "bd-update.log").read_text()
+            self.assertIn(
+                "worker.exit_history=",
+                updates,
+                f"missing exit_history append on retry; got:\n{updates}",
+            )
+            self.assertIn(
+                "~retry~turn_cap",
+                updates,
+                f"exit_history entry should carry retry kind + cause; got:\n{updates}",
+            )
+
     def test_records_exhausted_state_on_cap(self) -> None:
         """Cycle 5b — when attempts hit the cap, the wrapper records state=exhausted.
 
@@ -493,6 +548,12 @@ class WrapperMetadataTests(unittest.TestCase):
                 "worker.state=exhausted",
                 updates,
                 f"missing exhausted-state record; got:\n{updates}",
+            )
+            # Pack #105 audit-trail: exhaustion also appends to exit_history.
+            self.assertIn(
+                "~exhausted~",
+                updates,
+                f"exit_history should carry an exhausted entry on cap; got:\n{updates}",
             )
 
 
