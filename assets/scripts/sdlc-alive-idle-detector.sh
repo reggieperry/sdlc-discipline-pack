@@ -61,27 +61,16 @@ STATE_FILE="$STATE_DIR/alive-idle-nudges.json"
 
 # Resolve events.jsonl path. Production sources, in order:
 #   1. SDLC_ALIVE_IDLE_EVENTS_PATH explicit override (used by tests)
-#   2. $GC_CITY_ROOT/.gc/events.jsonl
-#   3. Walk up from $PWD looking for a directory containing .gc/events.jsonl
-#   4. gc cities first-row fallback
+#   2. shared library `lib/sdlc-find-city-root.sh` with `.gc/events.jsonl`
+#      as the walk-up marker — resolves $GC_CITY_ROOT, then walk-up
+#      from $PWD, then `gc cities` first-row fallback
 # Fail-closed: if we can't resolve, log and exit 2 — refusing to act is the
 # right behavior, since without event-age we'd false-positive on every bead.
 if [ -z "$EVENTS_PATH" ]; then
-    CITY_ROOT="${GC_CITY_ROOT:-}"
-    if [ -z "$CITY_ROOT" ]; then
-        # Walk up from $PWD looking for .gc/events.jsonl.
-        d="$PWD"
-        while [ "$d" != "/" ] && [ -n "$d" ]; do
-            if [ -f "$d/.gc/events.jsonl" ]; then
-                CITY_ROOT="$d"
-                break
-            fi
-            d=$(dirname "$d")
-        done
-    fi
-    if [ -z "$CITY_ROOT" ]; then
-        CITY_ROOT=$("$GC_BIN" cities 2>/dev/null | awk 'NR>1 {print $2; exit}')
-    fi
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    CITY_ROOT=$(SDLC_FIND_CITY_GC="$GC_BIN" \
+        bash "$SCRIPT_DIR/lib/sdlc-find-city-root.sh" .gc/events.jsonl \
+        2>/dev/null) || CITY_ROOT=""
     if [ -z "$CITY_ROOT" ] || [ ! -f "$CITY_ROOT/.gc/events.jsonl" ]; then
         echo "sdlc-alive-idle-detector: cannot resolve events.jsonl path (GC_CITY_ROOT='${GC_CITY_ROOT:-}' PWD='$PWD'); aborting" >&2
         exit 2
