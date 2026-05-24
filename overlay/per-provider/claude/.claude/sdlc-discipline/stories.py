@@ -445,6 +445,62 @@ def cmd_file(args: argparse.Namespace) -> int:
                     dep_failure = True
                 else:
                     print(f"  {sid} ({new_bead}) blocks-on {dep} ({pred_bead})")
+
+        # pack #154: cross-batch dep merge-gating. The reconciler's `bd ready`
+        # query admits a successor the moment its predecessor's bead reaches
+        # `status=closed`, but the finalizer parks the predecessor at
+        # chain-end with `final_state=pr_open_for_human` hours before the
+        # human merges the PR. Without a gate here, the successor's worker
+        # branches from origin/main before the predecessor's code lands —
+        # the race the dep edge was supposed to prevent.
+        #
+        # Defense: defer the successor's bead with a far-future date and tag
+        # it with the comma-joined predecessor bead ids. The new periodic
+        # order `orders/sdlc-cross-batch-dep-watcher.toml` observes the
+        # predecessors' `final_state` and clears the defer once all reach
+        # terminal merge-equivalent state (`merged`, `merged_delayed`,
+        # `branch_ready_no_pr`).
+        for story in selected:
+            sid = story["story_id"]
+            new_bead = assigned.get(sid)
+            if not new_bead:
+                continue
+            cross_batch_preds: list[str] = []
+            for dep in story.get("deps") or []:
+                if dep in selected_ids:
+                    continue
+                pred_story = by_id.get(dep)
+                if pred_story is None:
+                    continue
+                pred_bead = pred_story.get("filed_as_bead")
+                if pred_bead:
+                    cross_batch_preds.append(pred_bead)
+            if not cross_batch_preds:
+                continue
+            joined = ",".join(cross_batch_preds)
+            defer_result = subprocess.run(
+                [
+                    "bd",
+                    "update",
+                    new_bead,
+                    "--defer",
+                    "2099-01-01",
+                    "--set-metadata",
+                    f"cross_batch_dep_predecessors={joined}",
+                ],
+                cwd=rig_root,
+                capture_output=True,
+                text=True,
+            )
+            if defer_result.returncode != 0:
+                print(
+                    f"file: bd update --defer {new_bead} failed:\n{defer_result.stderr}",
+                    file=sys.stderr,
+                )
+                dep_failure = True
+            else:
+                print(f"  {sid} ({new_bead}) deferred pending merge of {joined}")
+
         if dep_failure:
             return 1
     finally:
