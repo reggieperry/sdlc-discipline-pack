@@ -399,6 +399,54 @@ def cmd_file(args: argparse.Namespace) -> int:
                 )
             else:
                 print(f"  WARN: {sid} not found in bd create output", file=sys.stderr)
+
+        # pack #152: cross-batch dep edges. `build_graph_plan` only emits edges
+        # for in-batch deps because `bd create --graph` errors when a dep's key
+        # is not in the plan's nodes. Cross-batch deps (predecessor filed in a
+        # prior invocation) need a second pass that calls `bd dep add` against
+        # the predecessor's already-assigned bead id. Without this pass the
+        # reconciler's `bd ready` query returns the successor immediately and
+        # a worker spawns before the predecessor merges — producing the race
+        # the dep edge is supposed to prevent.
+        selected_ids = {s["story_id"] for s in selected}
+        dep_failure = False
+        for story in selected:
+            sid = story["story_id"]
+            new_bead = assigned.get(sid)
+            if not new_bead:
+                continue  # already warned above
+            for dep in story.get("deps") or []:
+                if dep in selected_ids:
+                    continue  # handled by in-batch graph edge
+                pred_story = by_id.get(dep)
+                if pred_story is None:
+                    continue  # unknown ID — caught by validate
+                pred_bead = pred_story.get("filed_as_bead")
+                if not pred_bead:
+                    print(
+                        f"file: {sid} deps on {dep} but {dep} has no filed_as_bead yet; "
+                        f"file {dep} first",
+                        file=sys.stderr,
+                    )
+                    dep_failure = True
+                    continue
+                dep_result = subprocess.run(
+                    ["bd", "dep", "add", new_bead, "--depends-on", pred_bead],
+                    cwd=rig_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if dep_result.returncode != 0:
+                    print(
+                        f"file: bd dep add {new_bead} --depends-on {pred_bead} failed:\n"
+                        f"{dep_result.stderr}",
+                        file=sys.stderr,
+                    )
+                    dep_failure = True
+                else:
+                    print(f"  {sid} ({new_bead}) blocks-on {dep} ({pred_bead})")
+        if dep_failure:
+            return 1
     finally:
         os.unlink(plan_path)
     return 0
@@ -450,11 +498,12 @@ def build_graph_plan(
     edges = []
     for s in selected:
         for dep in s.get("deps") or []:
-            # Only emit edges between stories being filed in THIS batch. Deps on
-            # already-filed stories (in `by_id` but not `selected_ids`) had their
-            # relationships set up at their own file-time; re-emitting the edge
-            # here makes `bd create --graph` error because the dep's key is not
-            # in this plan's nodes ("to key 'X' not found in plan").
+            # Only emit edges between stories being filed in THIS batch.
+            # `bd create --graph` errors when an edge's `to_key` is not in
+            # the plan's nodes ("to key 'X' not found in plan"). Cross-batch
+            # deps (predecessor already filed in a prior invocation) are
+            # handled by the second pass in `cmd_file` after the graph
+            # create succeeds — see pack #152.
             if dep in selected_ids:
                 # bd "blocks" edge convention: from_key is the BLOCKED bead,
                 # to_key is the BLOCKER. A story with deps=[X] is BLOCKED BY X,
