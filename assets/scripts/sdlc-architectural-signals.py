@@ -535,6 +535,95 @@ def signal_e_public_name_removal(ctx: SignalContext) -> list[SignalDetail]:
     return hits
 
 
+SPEC_SWEEP_DIRS: tuple[str, ...] = ("stories/",)
+
+
+def signal_g_mechanical_sweep(ctx: SignalContext) -> list[SignalDetail]:
+    """Detect uniform same-shape edits across spec files.
+
+    Fires when ALL of:
+
+    - Every changed file is under a spec-shaped directory (today: ``stories/``).
+    - There are at least 2 changed files (one file is not a "sweep").
+    - Every file is a modification (not an addition or deletion).
+    - Every file's diff has exactly one ``+`` line and exactly one ``-`` line
+      (uniform 1+/1- substitution; no inserted blanks, no reflows).
+    - All ``-`` lines and all ``+`` lines target the same YAML key (the
+      substring before the first ``:``); the value can differ across files.
+
+    Empirical anchor: PR #247 (STRESS-07) on Elder, 2026-05-17 — 19
+    ``stories/*.md`` files, each 1+/1- on the ``status:`` line. Today's
+    reviewer correctly identified the shape but justified the tier via the
+    fragile ``edits_existing_function_bodies`` heuristic. Naming the
+    pattern as its own signal makes the right behavior intentional rather
+    than accidental.
+
+    When this signal fires, ``derive_recommendation`` routes to
+    ``review_encouraged`` rather than ``human_required`` — sensitive-file
+    touch (Signal A) still wins back to ``human_required`` if it also
+    fires.
+    """
+
+    if len(ctx.files) < 2:
+        return []
+
+    if not all(path.startswith(SPEC_SWEEP_DIRS) for _status, path in ctx.files):
+        return []
+
+    yaml_key: str | None = None
+    for status, path in ctx.files:
+        # Only pure modifications count; new/deleted files break the sweep shape.
+        if status != "M":
+            return []
+
+        diff = _git("diff", "--unified=0", f"{ctx.baseline}..{ctx.head}", "--", path)
+        plus_lines: list[str] = []
+        minus_lines: list[str] = []
+        for line in diff.splitlines():
+            if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+                continue
+            if line.startswith("+"):
+                plus_lines.append(line[1:])
+            elif line.startswith("-"):
+                minus_lines.append(line[1:])
+
+        if len(plus_lines) != 1 or len(minus_lines) != 1:
+            return []
+
+        # Extract YAML key — substring before the first ``:`` after stripping
+        # leading whitespace. Non-YAML edits (no colon) disqualify the sweep.
+        minus_text = minus_lines[0].lstrip()
+        plus_text = plus_lines[0].lstrip()
+        if ":" not in minus_text or ":" not in plus_text:
+            return []
+        rkey = minus_text.split(":", 1)[0].strip()
+        akey = plus_text.split(":", 1)[0].strip()
+        if rkey != akey:
+            return []  # not a same-key substitution within this file
+
+        if yaml_key is None:
+            yaml_key = rkey
+        elif yaml_key != rkey:
+            return []  # key differs across files
+
+    return [
+        SignalDetail(
+            signal="G",
+            kind="mechanical_sweep",
+            file="(multiple)",
+            extra={
+                "files_count": str(len(ctx.files)),
+                "yaml_key": yaml_key or "",
+                "rationale": (
+                    "all hunks are uniform 1+/1- edits on the same YAML key "
+                    "across spec files; routed to review_encouraged "
+                    "(24h delayed-merge buffer) rather than human_required"
+                ),
+            },
+        )
+    ]
+
+
 def signal_f_assertion_regression(ctx: SignalContext) -> list[SignalDetail]:
     hits: list[SignalDetail] = []
     for _status, path in ctx.files:
@@ -573,6 +662,17 @@ def derive_recommendation(
 ) -> str:
     if not rig.present:
         return "human_required"
+    # Sensitive-file touch (Signal A) always wins to human_required, even if
+    # the diff is otherwise a mechanical sweep.
+    if "A" in signals:
+        return "human_required"
+    # Mechanical sweep (Signal G) — uniform 1+/1- same-YAML-key edits across
+    # spec files — routes to review_encouraged (24h delayed-merge buffer)
+    # rather than human_required. The intent is to make the right routing
+    # reason-explicit so future tier-criteria edits don't reclassify uniform
+    # sweeps upward toward human_required. See signal_g_mechanical_sweep.
+    if "G" in signals:
+        return "review_encouraged"
     if signals:
         return "human_required"
     if (
@@ -614,6 +714,7 @@ def run(baseline: str, head: str, rig_config_path: Path) -> dict[str, object]:
     details += d_hits
     details += signal_e_public_name_removal(ctx)
     details += signal_f_assertion_regression(ctx)
+    details += signal_g_mechanical_sweep(ctx)
 
     fired = sorted({d.signal for d in details if d.signal != "MISSING_CONFIG"})
     if not rig.present:
