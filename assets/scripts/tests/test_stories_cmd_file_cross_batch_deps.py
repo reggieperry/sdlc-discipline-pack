@@ -65,11 +65,13 @@ def _write_exec(path: Path, body: str) -> None:
 
 
 def _make_bd_fake(tmp: Path, succ_bead: str) -> Path:
-    """Inline `bd` fake covering the three subcommands cmd_file calls.
+    """Inline `bd` fake covering the four subcommands cmd_file calls.
 
     - ``bd create --graph <path>`` → echoes ``EL-101 -> <succ_bead>`` so
       ``parse_bd_create_output`` can pick up the assignment.
     - ``bd dep add ...`` → exit 0, logging argv.
+    - ``bd update <bead> --defer <date> --set-metadata <kv>`` → exit 0,
+      logging argv. (pack #154 — merge-gating defer + metadata tag.)
     - Anything else → exit 0 silently (defensive; cmd_file does not call
       anything else in the happy path).
 
@@ -84,6 +86,9 @@ def _make_bd_fake(tmp: Path, succ_bead: str) -> Path:
         "    exit 0\n"
         "fi\n"
         'if [ "$1" = "dep" ] && [ "$2" = "add" ]; then\n'
+        "    exit 0\n"
+        "fi\n"
+        'if [ "$1" = "update" ]; then\n'
         "    exit 0\n"
         "fi\n"
         "exit 0\n"
@@ -191,6 +196,69 @@ class CmdFileCrossBatchDepTests(unittest.TestCase):
         self.assertIn("bd-succ002", dep_add_calls[0])
         self.assertIn("--depends-on", dep_add_calls[0])
         self.assertIn("bd-pred001", dep_add_calls[0])
+
+    def test_cross_batch_dep_defers_successor_with_marker(self) -> None:
+        """pack #154: successor is deferred + tagged with predecessor bead id."""
+        _write_spec(self._rig / "stories", "EL-100", PRED_FILED_SPEC)
+        _write_spec(self._rig / "stories", "EL-101", SUCC_WITH_CROSS_BATCH_DEP)
+        _make_bd_fake(self._tmp, succ_bead="bd-succ002")
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        update_calls = [c for c in calls if c.startswith("update bd-succ002")]
+        self.assertEqual(
+            len(update_calls),
+            1,
+            msg=f"expected exactly one `bd update bd-succ002` call; got {update_calls}",
+        )
+        update_call = update_calls[0]
+        self.assertIn("--defer", update_call)
+        self.assertIn("2099-01-01", update_call)
+        self.assertIn("--set-metadata", update_call)
+        self.assertIn("cross_batch_dep_predecessors=bd-pred001", update_call)
+
+    def test_multi_dep_joins_predecessors_with_comma(self) -> None:
+        """A successor with two cross-batch deps gets one defer with both predecessor bead ids."""
+        pred_b_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-099
+            title: Predecessor B (already filed)
+            status: filed
+            filed_as_bead: bd-predB001
+            ---
+
+            # body
+            """)
+        succ_multi_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-101
+            title: Successor with two cross-batch deps
+            status: ready
+            deps:
+              - EL-099
+              - EL-100
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-099", pred_b_spec)
+        _write_spec(self._rig / "stories", "EL-100", PRED_FILED_SPEC)
+        _write_spec(self._rig / "stories", "EL-101", succ_multi_spec)
+        _make_bd_fake(self._tmp, succ_bead="bd-succ002")
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        update_calls = [c for c in calls if c.startswith("update bd-succ002")]
+        self.assertEqual(len(update_calls), 1)
+        update_call = update_calls[0]
+        # Both predecessor bead ids present, comma-joined
+        self.assertIn("bd-predB001", update_call)
+        self.assertIn("bd-pred001", update_call)
+        self.assertIn("cross_batch_dep_predecessors=", update_call)
 
     def test_unfiled_predecessor_hard_fails(self) -> None:
         """Successor deps on a predecessor with no filed_as_bead → cmd_file exits nonzero."""
