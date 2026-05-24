@@ -409,6 +409,185 @@ class SignalF(unittest.TestCase):
         self.assertNotIn("F", result["signals"])
 
 
+# ---------- Signal G — mechanical sweep --------------------------------------
+
+
+def _spec_with_status(status_value: str) -> str:
+    return textwrap.dedent(
+        f"""\
+        ---
+        story_id: EL-XXX
+        title: example
+        status: {status_value}
+        labels: []
+        ---
+
+        # body
+        """
+    )
+
+
+def _spec_with_priority(priority_value: str) -> str:
+    return textwrap.dedent(
+        f"""\
+        ---
+        story_id: EL-YYY
+        title: example
+        priority: {priority_value}
+        labels: []
+        ---
+
+        # body
+        """
+    )
+
+
+class SignalG(unittest.TestCase):
+    """Mechanical-sweep recognition (pack #76)."""
+
+    def test_fires_on_uniform_status_sweep_across_stories(self) -> None:
+        repo = make_repo()
+        baseline = commit(
+            repo,
+            {
+                "stories/EL-100-a.md": _spec_with_status("ready"),
+                "stories/EL-101-b.md": _spec_with_status("ready"),
+                "stories/EL-102-c.md": _spec_with_status("ready"),
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "stories/EL-100-a.md": _spec_with_status("shipped"),
+                "stories/EL-101-b.md": _spec_with_status("shipped"),
+                "stories/EL-102-c.md": _spec_with_status("shipped"),
+            },
+            "sweep status ready -> shipped",
+        )
+        cfg = write_rig_config(repo)
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("G", result["signals"])
+        self.assertEqual(result["recommendation"], "review_encouraged")
+
+    def test_sensitive_file_override_wins_back_to_human_required(self) -> None:
+        """Signal A trumps Signal G — sensitive-file touch is always human_required."""
+        repo = make_repo()
+        baseline = commit(
+            repo,
+            {
+                "stories/EL-200-a.md": _spec_with_status("ready"),
+                "stories/EL-201-b.md": _spec_with_status("ready"),
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "stories/EL-200-a.md": _spec_with_status("shipped"),
+                "stories/EL-201-b.md": _spec_with_status("shipped"),
+            },
+            "sweep",
+        )
+        # Declare every stories/*.md as sensitive — pathological but exercises
+        # the override.
+        cfg = write_rig_config(repo, sensitive_files=["stories/*.md"])
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(
+            result["recommendation"],
+            "human_required",
+            msg="sensitive-file Signal A must override Signal G",
+        )
+
+    def test_does_not_fire_on_mixed_yaml_keys(self) -> None:
+        """Different keys across files disqualifies the sweep."""
+        repo = make_repo()
+        baseline = commit(
+            repo,
+            {
+                "stories/EL-300-a.md": _spec_with_status("ready"),
+                "stories/EL-301-b.md": _spec_with_priority("high"),
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "stories/EL-300-a.md": _spec_with_status("shipped"),
+                "stories/EL-301-b.md": _spec_with_priority("low"),
+            },
+            "mixed-key edits",
+        )
+        cfg = write_rig_config(repo)
+        result = run_script(repo, baseline, head, cfg)
+        self.assertNotIn("G", result["signals"])
+
+    def test_does_not_fire_on_single_file(self) -> None:
+        """One file is not a sweep."""
+        repo = make_repo()
+        baseline = commit(repo, {"stories/EL-400-a.md": _spec_with_status("ready")}, "baseline")
+        head = commit(
+            repo, {"stories/EL-400-a.md": _spec_with_status("shipped")}, "single-file edit"
+        )
+        cfg = write_rig_config(repo)
+        result = run_script(repo, baseline, head, cfg)
+        self.assertNotIn("G", result["signals"])
+
+    def test_does_not_fire_when_non_spec_file_in_diff(self) -> None:
+        """Sweep is disqualified if any file is outside stories/."""
+        repo = make_repo()
+        baseline = commit(
+            repo,
+            {
+                "stories/EL-500-a.md": _spec_with_status("ready"),
+                "stories/EL-501-b.md": _spec_with_status("ready"),
+                "core/unrelated.py": "x = 1\n",
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "stories/EL-500-a.md": _spec_with_status("shipped"),
+                "stories/EL-501-b.md": _spec_with_status("shipped"),
+                "core/unrelated.py": "x = 2\n",
+            },
+            "mixed dir edit",
+        )
+        cfg = write_rig_config(repo)
+        result = run_script(repo, baseline, head, cfg)
+        self.assertNotIn("G", result["signals"])
+
+    def test_does_not_fire_on_multi_line_per_file(self) -> None:
+        """A file with 2+/2- breaks the uniform 1+/1- shape."""
+        repo = make_repo()
+        spec_base = _spec_with_status("ready")
+        # Add a second changed line — modify title too — to break uniformity.
+        spec_head = spec_base.replace("status: ready", "status: shipped").replace(
+            "title: example", "title: example revised"
+        )
+        baseline = commit(
+            repo,
+            {
+                "stories/EL-600-a.md": spec_base,
+                "stories/EL-601-b.md": spec_base,
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "stories/EL-600-a.md": spec_head,
+                "stories/EL-601-b.md": spec_head,
+            },
+            "two-line per file",
+        )
+        cfg = write_rig_config(repo)
+        result = run_script(repo, baseline, head, cfg)
+        self.assertNotIn("G", result["signals"])
+
+
 # ---------- Missing rig-config ----------------------------------------------
 
 
