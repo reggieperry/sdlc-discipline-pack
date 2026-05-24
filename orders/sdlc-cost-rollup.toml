@@ -1,5 +1,5 @@
 [order]
-description = "On bead.closed, append a cost-ledger row for SDLC phase beads. Captures duration/session_id/phase/story_id/rig from bead metadata; cost_usd stays 0 until Gas City exposes per-session token usage."
-trigger = "event"
-on = "bead.closed"
-exec = "$PACK_DIR/assets/scripts/sdlc-cost-rollup.sh"
+description = "Periodic sweep — for each closed non-wisp bead whose (story_id, rig) pair is not yet in <city>/cost_history.csv, invoke the per-bead writer (assets/scripts/sdlc-cost-rollup.sh) to append its phase cost rows. Idempotent: re-runs do not duplicate rows. Workaround for gastownhall/gascity#2546 (bead.closed event regression for non-wisp beads). When that bug is fixed, the event-triggered shape can be restored by reverting this file to trigger='event' + on='bead.closed'; the per-bead writer stays as-is."
+trigger = "cooldown"
+interval = "30m"
+exec = "$PACK_DIR/assets/scripts/sdlc-cost-rollup-sweep.sh"
