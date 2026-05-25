@@ -654,6 +654,150 @@ class CmdFileCrossBatchDepIssue164Tests(unittest.TestCase):
         self.assertIn("--defer", update_calls[0])
         self.assertIn("cross_batch_dep_predecessors=bd-pred001", update_calls[0])
 
+    def test_depth_three_within_batch_chain_defers_each_successor(self) -> None:
+        """Pin the per-spec iteration shape on a depth-3 within-batch chain:
+        EL-101 → EL-102 → EL-103 all filed in one call. Each in-batch
+        successor must defer against its immediate predecessor's
+        just-assigned bead, not against the chain's root. Mechanically
+        identical to depth-2 (the defer loop iterates per spec), but
+        pinned against future regression in the per-spec source-of-bead-id
+        selection.
+        """
+        pred_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-101
+            title: First in batch
+            status: ready
+            ---
+
+            # body
+            """)
+        mid_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-102
+            title: Second in batch (deps on EL-101)
+            status: ready
+            deps:
+              - EL-101
+            ---
+
+            # body
+            """)
+        last_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-103
+            title: Third in batch (deps on EL-102)
+            status: ready
+            deps:
+              - EL-102
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-101", pred_spec)
+        _write_spec(self._rig / "stories", "EL-102", mid_spec)
+        _write_spec(self._rig / "stories", "EL-103", last_spec)
+        _make_bd_fake_multi(
+            self._tmp,
+            beads={"EL-101": "bd-101", "EL-102": "bd-102", "EL-103": "bd-103"},
+        )
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101", "EL-102", "EL-103")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        # Root (EL-101) has no deps; no defer.
+        root_updates = [c for c in calls if c.startswith("update bd-101")]
+        self.assertEqual(
+            len(root_updates),
+            0,
+            msg=f"EL-101 has no deps; should not be deferred; got {root_updates}",
+        )
+        # EL-102 deps on EL-101 (in-batch) — defer references EL-101's bead.
+        mid_updates = [c for c in calls if c.startswith("update bd-102")]
+        self.assertEqual(
+            len(mid_updates),
+            1,
+            msg=f"expected exactly one defer for EL-102; got {mid_updates}",
+        )
+        self.assertIn("cross_batch_dep_predecessors=bd-101", mid_updates[0])
+        # EL-103 deps on EL-102 (in-batch) — defer references EL-102's bead,
+        # not the chain root.
+        last_updates = [c for c in calls if c.startswith("update bd-103")]
+        self.assertEqual(
+            len(last_updates),
+            1,
+            msg=f"expected exactly one defer for EL-103; got {last_updates}",
+        )
+        self.assertIn("cross_batch_dep_predecessors=bd-102", last_updates[0])
+        self.assertNotIn(
+            "bd-101", last_updates[0]
+        )  # EL-103's defer references its immediate predecessor only
+
+    def test_mixed_in_batch_and_cross_batch_deps_join_in_metadata(self) -> None:
+        """A successor with one in-batch dep AND one cross-batch dep must
+        produce one `bd update --defer` whose `cross_batch_dep_predecessors`
+        metadata lists BOTH predecessor bead ids — the in-batch one sourced
+        from `assigned`, the cross-batch one from spec frontmatter. The
+        comma-join handles the heterogeneous source by construction.
+        """
+        cross_pred_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-100
+            title: Cross-batch predecessor (already filed)
+            status: filed
+            filed_as_bead: bd-pred100
+            ---
+
+            # body
+            """)
+        in_batch_pred_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-101
+            title: In-batch predecessor (being filed now)
+            status: ready
+            ---
+
+            # body
+            """)
+        mixed_succ_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-102
+            title: Successor with mixed deps
+            status: ready
+            deps:
+              - EL-100
+              - EL-101
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-100", cross_pred_spec)
+        _write_spec(self._rig / "stories", "EL-101", in_batch_pred_spec)
+        _write_spec(self._rig / "stories", "EL-102", mixed_succ_spec)
+        _make_bd_fake_multi(
+            self._tmp,
+            beads={"EL-101": "bd-101", "EL-102": "bd-102"},
+        )
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101", "EL-102")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        succ_updates = [c for c in calls if c.startswith("update bd-102")]
+        self.assertEqual(
+            len(succ_updates),
+            1,
+            msg=(
+                f"expected exactly one defer for EL-102 mixing both dep sources; got {succ_updates}"
+            ),
+        )
+        update_call = succ_updates[0]
+        # Both predecessor bead ids present in cross_batch_dep_predecessors.
+        self.assertIn("bd-pred100", update_call)  # cross-batch source via spec frontmatter
+        self.assertIn("bd-101", update_call)  # in-batch source via assigned mapping
+        self.assertIn("cross_batch_dep_predecessors=", update_call)
+
 
 if __name__ == "__main__":
     unittest.main()
