@@ -336,6 +336,26 @@ def detect_cycle(stories: list[dict[str, Any]]) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
+def _predecessor_already_merged(pred_story: dict[str, Any]) -> bool:
+    """Return True if a predecessor's story spec indicates it's already
+    merged — `status: closed` plus a populated `merged_pr` field.
+
+    pack #157: the cross-batch dep machinery should skip both `bd dep add`
+    and the merge-gating defer for merged predecessors. The race the defer
+    guards against (worker spawning before predecessor merges) is already
+    closed; the dep edge would fail anyway because the closed bead has
+    been removed from bd.
+
+    Conservative on partial state: a spec with `status: closed` but no
+    `merged_pr` (e.g., manual housekeeping flip without a PR) returns
+    False, so the existing defer-and-fail path runs and surfaces the
+    inconsistency rather than silently admitting it.
+    """
+    if pred_story.get("status") != "closed":
+        return False
+    return bool(pred_story.get("merged_pr"))
+
+
 def cmd_file(args: argparse.Namespace) -> int:
     rig_root = find_rig_root()
     stories_dir = rig_root / "stories"
@@ -421,6 +441,12 @@ def cmd_file(args: argparse.Namespace) -> int:
                 pred_story = by_id.get(dep)
                 if pred_story is None:
                     continue  # unknown ID — caught by validate
+                if _predecessor_already_merged(pred_story):
+                    # pack #157: the predecessor PR has merged and the bead
+                    # has been removed; `bd dep add` would fail and the race
+                    # the dep edge guards against is already closed.
+                    print(f"  {sid} ({new_bead}) admitted — predecessor {dep} already merged")
+                    continue
                 pred_bead = pred_story.get("filed_as_bead")
                 if not pred_bead:
                     print(
@@ -471,6 +497,10 @@ def cmd_file(args: argparse.Namespace) -> int:
                     continue
                 pred_story = by_id.get(dep)
                 if pred_story is None:
+                    continue
+                # pack #157: skip merged predecessors. The race the defer
+                # guards against is closed once the predecessor PR merges.
+                if _predecessor_already_merged(pred_story):
                     continue
                 pred_bead = pred_story.get("filed_as_bead")
                 if pred_bead:
