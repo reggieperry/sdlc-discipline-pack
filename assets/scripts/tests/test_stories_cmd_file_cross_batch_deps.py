@@ -400,5 +400,260 @@ class CmdFileCrossBatchDepTests(unittest.TestCase):
         )
 
 
+def _make_bd_fake_multi(
+    tmp: Path, beads: dict[str, str], bead_states: dict[str, dict] | None = None
+) -> Path:
+    """bd fake supporting multi-spec batches + bd show queries.
+
+    - `beads` maps story_id → bead_id. The mock's `bd create --graph` echo
+      emits one line per entry so `parse_bd_create_output` picks up every
+      assignment.
+    - `bead_states` (optional) maps bead_id → JSON-serializable dict the
+      mock returns on `bd show <bead-id> --json`. Used by the stale-
+      frontmatter face to assert the helper's defensive check consults
+      the bd layer when the spec frontmatter is stale.
+    """
+    bd = tmp / "bd"
+    create_output = "\n".join(f"{sid} -> {bid}" for sid, bid in beads.items())
+    bead_states = bead_states or {}
+    show_branches = []
+    for bead_id, state in bead_states.items():
+        import json as _json
+
+        state_json = _json.dumps([state]).replace('"', '\\"')
+        show_branches.append(
+            f'if [ "$1" = "show" ] && [ "$2" = "{bead_id}" ] && [ "$3" = "--json" ]; then\n'
+            f'    echo "{state_json}"\n'
+            "    exit 0\n"
+            "fi\n"
+        )
+    body = (
+        "#!/bin/bash\n"
+        f'echo "$@" >> "{tmp}/bd-argv.log"\n'
+        'if [ "$1" = "create" ] && [ "$2" = "--graph" ]; then\n'
+        f"    cat <<'BEAD_EOF'\n{create_output}\nBEAD_EOF\n"
+        "    exit 0\n"
+        "fi\n" + "".join(show_branches) + 'if [ "$1" = "show" ] && [ "$3" = "--json" ]; then\n'
+        '    echo "[]"\n'
+        "    exit 0\n"
+        "fi\n"
+        'if [ "$1" = "dep" ] && [ "$2" = "add" ]; then\n'
+        "    exit 0\n"
+        "fi\n"
+        'if [ "$1" = "update" ]; then\n'
+        "    exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    _write_exec(bd, body)
+    return bd
+
+
+class CmdFileCrossBatchDepIssue164Tests(unittest.TestCase):
+    """Pack #164 — both faces of the cross-batch dep machinery edge cases.
+
+    Face 1 (within-batch chain dependents): filing N specs in one batch
+    where each depends on the previous in the batch should defer every
+    dependent, not just the first. Pre-#164 only the cross-batch
+    successor (whose predecessor was in a prior batch) got the defer +
+    metadata treatment; within-batch successors got the bd-dep edge via
+    `bd create --graph` but no defer, so their workers spawned out-of-
+    order against incomplete predecessor state.
+
+    Face 2 (stale finalizer writeback): `_predecessor_already_merged`
+    reads only the spec frontmatter. When a chain finalizer fails to
+    write back `status: closed` + `merged_pr`, the helper returns False
+    and the defer fires on the new dependent — even though the
+    predecessor's bead has reached merge-equivalent terminal state. The
+    fix extends the helper with a defensive bd-layer check.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir_ctx = TemporaryDirectory()
+        self._tmp = Path(self._tmpdir_ctx.name)
+        self._rig = _make_rig(self._tmp)
+
+    def tearDown(self) -> None:
+        self._tmpdir_ctx.cleanup()
+
+    def _bd_calls(self) -> list[str]:
+        log = self._tmp / "bd-argv.log"
+        return log.read_text().strip().splitlines() if log.exists() else []
+
+    def test_within_batch_chain_dep_defers_each_successor(self) -> None:
+        """Face 1: file EL-101 + EL-102 in one batch where EL-102 deps on
+        EL-101. Both deferred-and-tagged setup must fire for EL-102 against
+        EL-101's just-assigned bead, even though EL-101 is being filed in
+        the same operation (within-batch predecessor).
+        """
+        pred_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-101
+            title: First in batch
+            status: ready
+            ---
+
+            # body
+            """)
+        succ_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-102
+            title: Second in batch (deps on EL-101)
+            status: ready
+            deps:
+              - EL-101
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-101", pred_spec)
+        _write_spec(self._rig / "stories", "EL-102", succ_spec)
+        _make_bd_fake_multi(self._tmp, beads={"EL-101": "bd-101", "EL-102": "bd-102"})
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101", "EL-102")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        # The within-batch successor MUST receive defer + metadata against
+        # the within-batch predecessor's just-assigned bead.
+        update_calls = [c for c in calls if c.startswith("update bd-102")]
+        self.assertEqual(
+            len(update_calls),
+            1,
+            msg=(
+                "expected exactly one `bd update bd-102 --defer ...` call for the "
+                f"within-batch successor; got {update_calls}"
+            ),
+        )
+        update_call = update_calls[0]
+        self.assertIn("--defer", update_call)
+        self.assertIn("2099-01-01", update_call)
+        self.assertIn("--set-metadata", update_call)
+        self.assertIn("cross_batch_dep_predecessors=bd-101", update_call)
+        # The within-batch predecessor (EL-101) has no deps, so no defer
+        # should fire for it.
+        pred_update_calls = [c for c in calls if c.startswith("update bd-101")]
+        self.assertEqual(
+            len(pred_update_calls),
+            0,
+            msg=f"predecessor EL-101 has no deps; should not be deferred; got {pred_update_calls}",
+        )
+
+    def test_stale_spec_with_merged_bead_admits_via_defensive_check(self) -> None:
+        """Face 2: predecessor spec frontmatter says `status: filed` (stale —
+        chain finalizer didn't write back) but the bd layer shows the bead
+        is `closed` with `final_state: merged`. The defensive check in
+        `_predecessor_already_merged` must admit the predecessor; no defer
+        should fire on the successor.
+        """
+        # Predecessor spec frontmatter is stale: status: filed (the chain
+        # finalizer's writeback failed silently), filed_as_bead populated.
+        pred_stale_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-100
+            title: Predecessor (stale frontmatter — finalizer writeback failed)
+            status: filed
+            filed_as_bead: bd-pred001
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-100", pred_stale_spec)
+        _write_spec(self._rig / "stories", "EL-101", SUCC_WITH_CROSS_BATCH_DEP)
+        # The bd layer's view of bd-pred001 is closed + final_state=merged
+        # (chain reached merge-equivalent terminal state even though the
+        # spec frontmatter writeback failed).
+        _make_bd_fake_multi(
+            self._tmp,
+            beads={"EL-101": "bd-succ002"},
+            bead_states={
+                "bd-pred001": {
+                    "id": "bd-pred001",
+                    "status": "closed",
+                    "metadata": {"final_state": "merged"},
+                },
+            },
+        )
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        # No bd update --defer should fire — the defensive bd-layer check
+        # admitted the predecessor as already-merged.
+        update_calls = [c for c in calls if c.startswith("update bd-succ002")]
+        self.assertEqual(
+            len(update_calls),
+            0,
+            msg=(
+                "stale frontmatter + closed-merged bead → defensive check should "
+                f"admit; expected no defer call; got {update_calls}"
+            ),
+        )
+        # No bd dep add should fire either — same reasoning, the predecessor
+        # is gone at the bd layer.
+        dep_add_calls = [c for c in calls if c.startswith("dep add ")]
+        self.assertEqual(
+            len(dep_add_calls),
+            0,
+            msg=(
+                "stale frontmatter + closed-merged bead → defensive check should "
+                f"skip bd dep add; got {dep_add_calls}"
+            ),
+        )
+
+    def test_stale_spec_with_non_merged_bead_still_defers(self) -> None:
+        """Face 2 negative: predecessor spec is stale AND the bd layer shows
+        the bead is closed but with a non-merge-equivalent `final_state`
+        (e.g., the chain abandoned without producing a merge). The defensive
+        check must NOT admit; the defer should fire so the successor waits
+        for operator triage.
+        """
+        pred_stale_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-100
+            title: Predecessor (stale; bead closed but not merged)
+            status: filed
+            filed_as_bead: bd-pred001
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-100", pred_stale_spec)
+        _write_spec(self._rig / "stories", "EL-101", SUCC_WITH_CROSS_BATCH_DEP)
+        # Bead is closed but `final_state` is missing — chain finished
+        # without a merge (e.g., abandoned, manually closed, error path).
+        # The defensive check should refuse to admit on this signal.
+        _make_bd_fake_multi(
+            self._tmp,
+            beads={"EL-101": "bd-succ002"},
+            bead_states={
+                "bd-pred001": {
+                    "id": "bd-pred001",
+                    "status": "closed",
+                    "metadata": {},
+                },
+            },
+        )
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101")
+
+        # The bd dep add path may fail (predecessor bead doesn't actually
+        # exist in the test fixture; the mock returns success but the real
+        # bd would error). The successor's defer is what we care about.
+        calls = self._bd_calls()
+        update_calls = [c for c in calls if c.startswith("update bd-succ002")]
+        self.assertEqual(
+            len(update_calls),
+            1,
+            msg=(
+                "stale frontmatter + closed-but-not-merged bead → defensive check "
+                f"should NOT admit; expected one defer call; got {update_calls}"
+            ),
+        )
+        self.assertIn("--defer", update_calls[0])
+        self.assertIn("cross_batch_dep_predecessors=bd-pred001", update_calls[0])
+
+
 if __name__ == "__main__":
     unittest.main()
