@@ -336,6 +336,24 @@ def detect_cycle(stories: list[dict[str, Any]]) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
+def _kickoff_script_path() -> Path:
+    """Return the path to the pack's `commands/kickoff/run.sh`.
+
+    Default: resolved relative to this file's location in the pack tree
+    (stories.py is at `<pack>/overlay/per-provider/claude/.claude/sdlc-discipline/`;
+    kickoff is at `<pack>/commands/kickoff/run.sh`).
+
+    Override: set STORIES_KICKOFF_OVERRIDE to point at an alternate script.
+    Used by tests to substitute a fake kickoff that doesn't require bd / gc.
+    """
+    override = os.environ.get("STORIES_KICKOFF_OVERRIDE")
+    if override:
+        return Path(override)
+    # parents[5] = pack root. parents[0..4] = sdlc-discipline / .claude /
+    # claude / per-provider / overlay.
+    return Path(__file__).resolve().parents[5] / "commands" / "kickoff" / "run.sh"
+
+
 def _predecessor_already_merged(pred_story: dict[str, Any]) -> bool:
     """Return True if a predecessor's story spec indicates it's already
     merged — `status: closed` plus a populated `merged_pr` field.
@@ -530,6 +548,31 @@ def cmd_file(args: argparse.Namespace) -> int:
                 dep_failure = True
             else:
                 print(f"  {sid} ({new_bead}) deferred pending merge of {joined}")
+
+        # pack #158: optional --kickoff flag runs commands/kickoff/run.sh for
+        # each newly-assigned bead, routing it to the chain pool. Per-bead
+        # success/failure surfaced in the output; one kickoff failure does
+        # not halt remaining kickoffs but does set dep_failure so the
+        # function exits non-zero.
+        if getattr(args, "kickoff", False) and assigned:
+            kickoff = _kickoff_script_path()
+            for sid, new_bead in assigned.items():
+                kickoff_result = subprocess.run(
+                    ["sh", str(kickoff), new_bead],
+                    cwd=rig_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if kickoff_result.returncode != 0:
+                    stderr_tail = (kickoff_result.stderr or "").strip().splitlines()
+                    summary = stderr_tail[-1] if stderr_tail else "(no stderr)"
+                    print(
+                        f"  kickoff: {new_bead} FAILED — {summary}",
+                        file=sys.stderr,
+                    )
+                    dep_failure = True
+                else:
+                    print(f"  kickoff: {new_bead} OK")
 
         if dep_failure:
             return 1
@@ -931,6 +974,16 @@ def main() -> int:
     p_file.add_argument("--phase", type=int, help="File all status=ready stories in this phase.")
     p_file.add_argument(
         "--dry-run", action="store_true", help="Print the graph plan JSON; do not call bd."
+    )
+    p_file.add_argument(
+        "--kickoff",
+        action="store_true",
+        help=(
+            "After bead-create + writeback, invoke commands/kickoff/run.sh for each "
+            "newly-assigned bead so it routes to the chain pool immediately. Per-bead "
+            "success/failure surfaced in the output block; one kickoff failure does not "
+            "halt remaining kickoffs."
+        ),
     )
     p_file.set_defaults(func=cmd_file)
 
