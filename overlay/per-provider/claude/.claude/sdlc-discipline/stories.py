@@ -354,24 +354,59 @@ def _kickoff_script_path() -> Path:
     return Path(__file__).resolve().parents[5] / "commands" / "kickoff" / "run.sh"
 
 
-def _predecessor_already_merged(pred_story: dict[str, Any]) -> bool:
-    """Return True if a predecessor's story spec indicates it's already
-    merged — `status: closed` plus a populated `merged_pr` field.
+_BEAD_MERGE_EQUIVALENT_STATES = {"merged", "merged_delayed", "branch_ready_no_pr"}
 
-    pack #157: the cross-batch dep machinery should skip both `bd dep add`
-    and the merge-gating defer for merged predecessors. The race the defer
-    guards against (worker spawning before predecessor merges) is already
-    closed; the dep edge would fail anyway because the closed bead has
-    been removed from bd.
 
-    Conservative on partial state: a spec with `status: closed` but no
-    `merged_pr` (e.g., manual housekeeping flip without a PR) returns
-    False, so the existing defer-and-fail path runs and surfaces the
-    inconsistency rather than silently admitting it.
+def _predecessor_already_merged(pred_story: dict[str, Any], rig_root: Path | None = None) -> bool:
+    """Return True if a predecessor is already merged.
+
+    Fast path (pack #157): the predecessor's story-spec frontmatter
+    indicates `status: closed` plus a populated `merged_pr` field — the
+    chain finalizer completed its writeback step normally.
+
+    Defensive path (pack #164 face 2): the spec frontmatter is stale
+    (`status: filed` or `status: closed` without `merged_pr`) because the
+    chain finalizer's writeback failed silently, but the bd layer's view
+    of the predecessor bead is `status: closed` with a merge-equivalent
+    `final_state`. Without this fallback, the defer fires on a dependent
+    whose predecessor actually merged — the failure that bit Elder
+    filings on 2026-05-25.
+
+    `rig_root` is required for the defensive path (it scopes the `bd show`
+    invocation). When omitted, only the fast path runs — used in code
+    paths where the bd binary isn't reachable.
+
+    Conservative on every ambiguous signal: a closed bead with no
+    merge-equivalent `final_state` (chain abandoned, manually closed,
+    error path) returns False, so the existing defer-and-fail path runs
+    and surfaces the inconsistency rather than silently admitting it.
     """
-    if pred_story.get("status") != "closed":
+    if pred_story.get("status") == "closed" and pred_story.get("merged_pr"):
+        return True
+    if rig_root is None:
         return False
-    return bool(pred_story.get("merged_pr"))
+    bead_id = pred_story.get("filed_as_bead")
+    if not bead_id:
+        return False
+    result = subprocess.run(
+        ["bd", "show", bead_id, "--json"],
+        cwd=rig_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        beads = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    if not beads:
+        return False
+    bead = beads[0]
+    if bead.get("status") != "closed":
+        return False
+    final_state = (bead.get("metadata") or {}).get("final_state")
+    return final_state in _BEAD_MERGE_EQUIVALENT_STATES
 
 
 def cmd_file(args: argparse.Namespace) -> int:
@@ -459,7 +494,7 @@ def cmd_file(args: argparse.Namespace) -> int:
                 pred_story = by_id.get(dep)
                 if pred_story is None:
                     continue  # unknown ID — caught by validate
-                if _predecessor_already_merged(pred_story):
+                if _predecessor_already_merged(pred_story, rig_root):
                     # pack #157: the predecessor PR has merged and the bead
                     # has been removed; `bd dep add` would fail and the race
                     # the dep edge guards against is already closed.
@@ -511,16 +546,26 @@ def cmd_file(args: argparse.Namespace) -> int:
                 continue
             cross_batch_preds: list[str] = []
             for dep in story.get("deps") or []:
-                if dep in selected_ids:
-                    continue
                 pred_story = by_id.get(dep)
                 if pred_story is None:
                     continue
                 # pack #157: skip merged predecessors. The race the defer
                 # guards against is closed once the predecessor PR merges.
-                if _predecessor_already_merged(pred_story):
+                if _predecessor_already_merged(pred_story, rig_root):
                     continue
-                pred_bead = pred_story.get("filed_as_bead")
+                # pack #164 face 1: within-batch chain dep. Look up the
+                # predecessor's just-assigned bead from the current batch's
+                # `assigned` mapping. Pre-#164 this loop skipped in-batch
+                # deps under the assumption the bd graph edge was enough,
+                # but the graph edge alone doesn't gate the pool reconciler
+                # against the merge race — the defer + metadata does. So
+                # the defer must fire for in-batch deps too, using the
+                # just-assigned bead-id since the predecessor's spec
+                # frontmatter `filed_as_bead` writeback hasn't landed yet.
+                if dep in selected_ids:
+                    pred_bead = assigned.get(dep)
+                else:
+                    pred_bead = pred_story.get("filed_as_bead")
                 if pred_bead:
                     cross_batch_preds.append(pred_bead)
             if not cross_batch_preds:
