@@ -161,6 +161,18 @@ PRED_UNFILED_SPEC = textwrap.dedent("""\
     # body
     """)
 
+PRED_MERGED_SPEC = textwrap.dedent("""\
+    ---
+    story_id: EL-100
+    title: Predecessor (already merged)
+    status: closed
+    filed_as_bead: bd-pred001
+    merged_pr: "#100"
+    ---
+
+    # body
+    """)
+
 
 class CmdFileCrossBatchDepTests(unittest.TestCase):
     """Pack #152 — cross-batch dep-edge translation."""
@@ -280,6 +292,89 @@ class CmdFileCrossBatchDepTests(unittest.TestCase):
             any(c.startswith("dep add ") for c in calls),
             msg=f"bd dep add should NOT have been called; got {calls}",
         )
+
+    def test_merged_predecessor_skips_both_dep_add_and_defer(self) -> None:
+        """pack #157: when the predecessor spec has `status: closed` + a
+        populated `merged_pr`, the cross-batch machinery treats the
+        predecessor as already-merged. No `bd dep add` is issued
+        (the predecessor bead is gone, the call would fail), and no
+        `bd update --defer` fires (the race the defer guards against is
+        already closed). The successor enters bd ready immediately.
+
+        Without this guard, the successor was deferred to 2099-01-01 and
+        invisible to the chain pool reconciler — the exact failure that
+        bit Elder filings on 2026-05-24.
+        """
+        _write_spec(self._rig / "stories", "EL-100", PRED_MERGED_SPEC)
+        _write_spec(self._rig / "stories", "EL-101", SUCC_WITH_CROSS_BATCH_DEP)
+        _make_bd_fake(self._tmp, succ_bead="bd-succ002")
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        # No bd dep add — would have failed because the predecessor bead
+        # is gone (story-spec layer says closed; bd layer agrees: removed).
+        self.assertFalse(
+            any(c.startswith("dep add ") for c in calls),
+            msg=f"bd dep add should NOT have been called for a merged predecessor; got {calls}",
+        )
+        # No bd update --defer — the race the defer guards against is closed
+        # the moment the predecessor's PR merges.
+        update_calls = [c for c in calls if c.startswith("update bd-succ002")]
+        self.assertEqual(
+            len(update_calls),
+            0,
+            msg=f"bd update --defer should NOT have been called for a merged predecessor; got {update_calls}",
+        )
+
+    def test_partial_merged_predecessors_only_defers_pending_ones(self) -> None:
+        """pack #157: when a successor has multiple cross-batch deps and SOME
+        are merged while others are still pending, the defer should fire only
+        with the pending predecessors named in `cross_batch_dep_predecessors`.
+        The merged predecessor is filtered out of the comma-joined list.
+        """
+        pred_pending_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-099
+            title: Predecessor B (still pending)
+            status: filed
+            filed_as_bead: bd-predB001
+            ---
+
+            # body
+            """)
+        succ_multi_spec = textwrap.dedent("""\
+            ---
+            story_id: EL-101
+            title: Successor with one merged + one pending dep
+            status: ready
+            deps:
+              - EL-099
+              - EL-100
+            ---
+
+            # body
+            """)
+        _write_spec(self._rig / "stories", "EL-099", pred_pending_spec)
+        _write_spec(self._rig / "stories", "EL-100", PRED_MERGED_SPEC)
+        _write_spec(self._rig / "stories", "EL-101", succ_multi_spec)
+        _make_bd_fake(self._tmp, succ_bead="bd-succ002")
+
+        result = _run_cmd_file(self._rig, self._tmp, "EL-101")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        calls = self._bd_calls()
+        # bd dep add fires for the pending predecessor, not the merged one
+        dep_add_calls = [c for c in calls if c.startswith("dep add ")]
+        self.assertEqual(len(dep_add_calls), 1, msg=f"expected one dep add; got {dep_add_calls}")
+        self.assertIn("bd-predB001", dep_add_calls[0])
+        self.assertNotIn("bd-pred001", dep_add_calls[0])
+        # defer carries only the pending predecessor bead id
+        update_calls = [c for c in calls if c.startswith("update bd-succ002")]
+        self.assertEqual(len(update_calls), 1, msg=f"expected one defer; got {update_calls}")
+        self.assertIn("cross_batch_dep_predecessors=bd-predB001", update_calls[0])
+        self.assertNotIn("bd-pred001", update_calls[0])
 
     def test_no_cross_batch_deps_is_quiet(self) -> None:
         """Successor with no cross-batch deps → no `bd dep add` invocation."""
