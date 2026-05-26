@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SDLC pack recovery patterns + gas city boundary — 2026-05-25</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #fdfdfb;
+      --fg: #1f2328;
+      --muted: #6e7681;
+      --rule: #d8d0c4;
+      --accent: #3b5998;
+      --accent-muted: #e8ecf5;
+      --warn: #b35a3a;
+      --warn-bg: #fbeee6;
+      --good: #2f7d3c;
+      --good-bg: #e8f3ea;
+      --pack: #c97a40;
+      --pack-bg: #fbf0e5;
+      --gas: #5b6f8d;
+      --gas-bg: #ecf0f5;
+      --hybrid: #6a4f7a;
+      --hybrid-bg: #f0e9f3;
+      --migrated: #4a7559;
+      --migrated-bg: #e6f0ea;
+    }
+
+    html { background: var(--bg); }
+    body {
+      font-family: "Charter", "Georgia", "Iowan Old Style", serif;
+      font-size: 16px;
+      line-height: 1.55;
+      color: var(--fg);
+      max-width: 980px;
+      margin: 2em auto;
+      padding: 0 1.5em;
+    }
+
+    h1, h2, h3, h4 {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-weight: 600;
+      color: var(--fg);
+      line-height: 1.25;
+    }
+    h1 { font-size: 1.9em; margin-top: 0; }
+    h2 {
+      font-size: 1.45em;
+      margin-top: 2.2em;
+      padding-bottom: 0.25em;
+      border-bottom: 1px solid var(--rule);
+    }
+    h3 { font-size: 1.15em; margin-top: 1.6em; }
+    h4 { font-size: 1em; margin-top: 1.2em; color: var(--muted); }
+
+    .subtitle {
+      font-size: 1.1em;
+      color: var(--muted);
+      margin-top: -0.6em;
+      margin-bottom: 0.3em;
+    }
+    .meta {
+      font-size: 0.9em;
+      color: var(--muted);
+      margin-bottom: 2em;
+    }
+    p { margin: 0.7em 0; }
+    a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-muted); }
+    a:hover { border-bottom-color: var(--accent); }
+
+    code, pre, .mono {
+      font-family: "SF Mono", "JetBrains Mono", "Consolas", monospace;
+      font-size: 0.92em;
+    }
+    code {
+      background: var(--accent-muted);
+      padding: 0.05em 0.35em;
+      border-radius: 3px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1em 0;
+      font-size: 0.93em;
+    }
+    th, td {
+      padding: 0.55em 0.7em;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--rule);
+    }
+    th {
+      background: var(--accent-muted);
+      font-family: -apple-system, sans-serif;
+      font-weight: 600;
+      font-size: 0.88em;
+      letter-spacing: 0.02em;
+    }
+    td.center { text-align: center; }
+    td.mono { font-family: "SF Mono", monospace; font-size: 0.88em; }
+
+    .tag {
+      display: inline-block;
+      padding: 0.1em 0.55em;
+      border-radius: 3px;
+      font-family: -apple-system, sans-serif;
+      font-size: 0.78em;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+    .tag-pack { color: var(--pack); background: var(--pack-bg); }
+    .tag-gas { color: var(--gas); background: var(--gas-bg); }
+    .tag-hybrid { color: var(--hybrid); background: var(--hybrid-bg); }
+    .tag-migrated { color: var(--migrated); background: var(--migrated-bg); }
+
+    .callout {
+      background: var(--accent-muted);
+      border-left: 3px solid var(--accent);
+      padding: 0.8em 1.1em;
+      margin: 1.2em 0;
+      border-radius: 0 4px 4px 0;
+    }
+    .callout p:first-child { margin-top: 0; }
+    .callout p:last-child { margin-bottom: 0; }
+    .callout-quote {
+      font-style: italic;
+      color: var(--fg);
+    }
+    .callout-cite {
+      display: block;
+      font-style: normal;
+      font-size: 0.85em;
+      color: var(--muted);
+      margin-top: 0.4em;
+    }
+
+    /* Layered architecture diagram (inline SVG) */
+    .layers-diagram {
+      margin: 1.5em 0;
+      display: flex;
+      justify-content: center;
+    }
+
+    /* Cadence timeline (CSS grid) */
+    .cadence-timeline {
+      display: grid;
+      grid-template-columns: 200px repeat(30, 1fr);
+      gap: 2px;
+      margin: 1em 0 0.5em 0;
+      font-size: 0.78em;
+      align-items: center;
+    }
+    .cadence-row { display: contents; }
+    .cadence-label {
+      grid-column: 1;
+      padding: 0.3em 0.5em;
+      font-family: "SF Mono", monospace;
+      font-size: 0.85em;
+      color: var(--fg);
+      text-align: right;
+    }
+    .cadence-cell {
+      height: 1.6em;
+      background: transparent;
+      border-radius: 2px;
+    }
+    .cadence-fire { background: var(--accent); }
+    .cadence-fire-pack { background: var(--pack); }
+    .cadence-fire-hybrid { background: var(--hybrid); }
+    .cadence-fire-migrated { background: var(--migrated); }
+    .cadence-fire-event { background-image: repeating-linear-gradient(
+      45deg, var(--muted), var(--muted) 3px, transparent 3px, transparent 6px); }
+    .cadence-axis {
+      grid-column: 2 / span 30;
+      display: grid;
+      grid-template-columns: repeat(30, 1fr);
+      font-size: 0.7em;
+      color: var(--muted);
+      text-align: center;
+      padding-top: 0.3em;
+      border-top: 1px solid var(--rule);
+      margin-top: 0.3em;
+    }
+    .cadence-tick {
+      padding-top: 0.2em;
+    }
+    .cadence-tick.major {
+      color: var(--fg);
+      font-weight: 600;
+    }
+
+    /* Mermaid container */
+    .mermaid {
+      margin: 1.5em 0;
+      text-align: center;
+      background: var(--bg);
+    }
+
+    /* Boundary diagram */
+    .boundary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.2em;
+      margin: 1em 0;
+    }
+    .boundary-col {
+      padding: 1em;
+      border-radius: 6px;
+    }
+    .boundary-gas { background: var(--gas-bg); border-left: 4px solid var(--gas); }
+    .boundary-pack { background: var(--pack-bg); border-left: 4px solid var(--pack); }
+    .boundary-col h4 { margin-top: 0; color: var(--fg); }
+    .boundary-col ul { padding-left: 1.2em; margin: 0.6em 0; }
+    .boundary-col li { margin: 0.35em 0; }
+
+    /* Coverage timeline */
+    .coverage-tl {
+      margin: 1.5em 0;
+      padding: 0;
+      list-style: none;
+      border-left: 2px solid var(--rule);
+    }
+    .coverage-tl li {
+      position: relative;
+      padding: 0.5em 0 0.5em 1.3em;
+      margin-left: -1px;
+    }
+    .coverage-tl li::before {
+      content: "";
+      position: absolute;
+      left: -0.35em;
+      top: 1em;
+      width: 0.5em;
+      height: 0.5em;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .coverage-tl .version {
+      font-family: "SF Mono", monospace;
+      font-size: 0.88em;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .coverage-tl .date {
+      font-size: 0.85em;
+      color: var(--muted);
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 4em;
+      padding-top: 1.5em;
+      border-top: 1px solid var(--rule);
+      font-size: 0.88em;
+      color: var(--muted);
+    }
+    footer ul { padding-left: 1.5em; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>SDLC pack recovery patterns + gas city boundary</h1>
+  <p class="subtitle">A map of the twelve recovery mechanisms and where each sits relative to the gas city substrate</p>
+  <p class="meta">2026-05-25 PT &middot; Reggie Perry</p>
+</header>
+
+<section id="overview">
+  <h2>What this document maps</h2>
+
+  <p>The SDLC discipline pack ships twelve distinct recovery mechanisms — nine periodic orders, one chain-layer defensive admit, one wrapper-layer retry, plus the post-finalizer tech-debt-classification pipeline. They accreted over ~30 minor releases as failure modes surfaced empirically. Three substantive recovery fixes shipped today alone in the v2.35.0 / v2.35.1 / v2.35.2 arc.</p>
+
+  <p>Two questions this document answers. First — what is each mechanism actually recovering from, and how do the twelve fit together at runtime? Second — for each one, does it belong in the pack, or is it solving a gas-city-level concern that should be upstreamed into the SDK?</p>
+
+  <p>The substrate beneath the pack is <a href="https://github.com/gastownhall/gascity">gas city</a> — the open-source SDK built by Jason Knutsen and the Gas Town Hall community, extracted from Steve Yegge's Gas Town framework. Gas city provides the supervisor, the bead store, the order scheduler, the session lifecycle, the typed event system. The pack provides discipline on top: chain phases, rules, recovery mechanisms calibrated to the SDLC domain. The boundary between the two has been drawn ad hoc as the pack evolved.</p>
+</section>
+
+<section id="layered-architecture">
+  <h2>Three layers of recovery</h2>
+
+  <p>The pack's recovery mechanisms live in three layers, each with a distinct relationship to gas city. The wrapper layer wraps Claude Code; the order layer runs under gas city's supervisor; the chain layer runs inside the pack's own filing-time logic. The supervisor sits beneath all three, providing the event substrate the order layer subscribes to.</p>
+
+  <div class="layers-diagram">
+    <svg viewBox="0 0 780 380" width="780" height="380" xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .layer-box { fill: var(--bg); stroke: var(--rule); stroke-width: 1.5; }
+        .layer-title { font-family: -apple-system, sans-serif; font-size: 13px; font-weight: 600; fill: var(--fg); }
+        .layer-mech { font-family: "SF Mono", monospace; font-size: 11px; fill: var(--fg); }
+        .layer-note { font-family: -apple-system, sans-serif; font-size: 10px; fill: var(--muted); font-style: italic; }
+        .substrate-box { fill: var(--gas-bg); stroke: var(--gas); stroke-width: 2; }
+        .wrapper-box { fill: var(--hybrid-bg); stroke: var(--hybrid); }
+        .order-box { fill: var(--pack-bg); stroke: var(--pack); }
+        .chain-box { fill: var(--good-bg); stroke: var(--good); }
+        .arrow-line { stroke: var(--muted); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+      </style>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6e7681"/>
+        </marker>
+      </defs>
+
+      <!-- Wrapper layer -->
+      <rect class="layer-box wrapper-box" x="40" y="20" width="700" height="60" rx="4"/>
+      <text class="layer-title" x="60" y="42">Wrapper layer &mdash; per Claude Code session</text>
+      <text class="layer-mech" x="60" y="62">claude_retry.py</text>
+      <text class="layer-note" x="240" y="62">Mode A: API 529 (Overload); per-turn-cap recovery via --resume</text>
+
+      <!-- Order layer -->
+      <rect class="layer-box order-box" x="40" y="100" width="700" height="170" rx="4"/>
+      <text class="layer-title" x="60" y="122">Order layer &mdash; periodic, supervisor-driven (9 orders)</text>
+
+      <!-- order list inside the box -->
+      <text class="layer-mech" x="60" y="148">sdlc-zombie-reconciler</text>
+      <text class="layer-note" x="220" y="148">5m &middot; stale-filed spec recovery (#92 + #170)</text>
+
+      <text class="layer-mech" x="60" y="166">sdlc-cross-batch-dep-watcher</text>
+      <text class="layer-note" x="240" y="166">5m &middot; admit deferred successors (#154 + #179)</text>
+
+      <text class="layer-mech" x="60" y="184">sdlc-stale-pr-sweeper</text>
+      <text class="layer-note" x="220" y="184">5m &middot; bd &harr; gh state sync</text>
+
+      <text class="layer-mech" x="60" y="202">sdlc-alive-idle-detector</text>
+      <text class="layer-note" x="220" y="202">5m &middot; Mode C: alive-but-idle session stall</text>
+
+      <text class="layer-mech" x="60" y="220">sdlc-exhausted-bead-retry</text>
+      <text class="layer-note" x="240" y="220">5m &middot; budget-exhausted bead retry</text>
+
+      <text class="layer-mech" x="60" y="238">sdlc-stall-detector</text>
+      <text class="layer-note" x="220" y="238">15m &middot; chain has made no progress</text>
+
+      <text class="layer-mech" x="380" y="148">sdlc-order-stall-detector</text>
+      <text class="layer-note" x="540" y="148">15m &middot; self-monitor dispatch</text>
+
+      <text class="layer-mech" x="380" y="166">sdlc-rebase-watcher</text>
+      <text class="layer-note" x="520" y="166">event &middot; rebase stale PRs</text>
+
+      <text class="layer-mech" x="380" y="184">sdlc-drain-ack-recover</text>
+      <text class="layer-note" x="540" y="184">event &middot; Mode B: drain-ack park (#2293 / #2380)</text>
+
+      <!-- Chain layer -->
+      <rect class="layer-box chain-box" x="40" y="290" width="700" height="60" rx="4"/>
+      <text class="layer-title" x="60" y="312">Chain layer &mdash; runs at filing time (stories.py)</text>
+      <text class="layer-mech" x="60" y="332">_predecessor_already_merged</text>
+      <text class="layer-note" x="260" y="332">defensive bd-show fallback (v2.34.0 / #164 Face 2)</text>
+
+      <!-- Substrate -->
+      <rect class="layer-box substrate-box" x="40" y="365" width="700" height="0" rx="0"/>
+    </svg>
+  </div>
+
+  <p style="font-size: 0.9em; color: var(--muted); margin-top: -0.5em;">
+    The order layer subscribes to gas city events (e.g., <code>bead.closed</code>, <code>session.drain_acked_with_assigned_work</code>); the wrapper layer wraps Claude Code at the per-session boundary; the chain layer runs synchronously inside <code>stories.py:cmd_file</code> at the moment a story is filed. All three lean on gas city's bead store for persistent state.
+  </p>
+</section>
+
+<section id="bead-lifecycle">
+  <h2>Bead lifecycle with recovery transitions</h2>
+
+  <p>A bead's status states are gas city primitives; the <code>final_state</code> metadata is a pack-defined extension that the SDLC chain populates at chain-end. Recovery mechanisms intercept failed transitions and route them back into the happy path.</p>
+
+  <div class="mermaid">
+stateDiagram-v2
+    [*] --> ready : stories.py file (spec authored)
+    ready --> filed : bd create + kickoff
+    filed --> in_progress : session reconciler admits
+    filed --> deferred : cross-batch dep blocks
+    deferred --> in_progress : watcher clears defer
+
+    in_progress --> closed_chain_finished : chain runs phases
+
+    state closed_chain_finished {
+      [*] --> pr_open_for_human : finalizer opens PR
+      pr_open_for_human --> merged : operator merges
+      pr_open_for_human --> merged_delayed : delayed-merge order fires (24h)
+      pr_open_for_human --> branch_ready_no_pr : finalizer alt-path
+    }
+
+    closed_chain_finished --> stale_filed : finalizer crashes before writeback
+    stale_filed --> closed_chain_finished : zombie-reconciler advances (v2.35.0)
+
+    in_progress --> alive_idle : Mode C stall
+    alive_idle --> in_progress : alive-idle-detector nudges
+
+    in_progress --> drain_acked : Mode B stall
+    drain_acked --> in_progress : drain-ack-recover fires
+
+    in_progress --> exhausted : budget hit
+    exhausted --> filed : exhausted-bead-retry re-files
+
+    closed_chain_finished --> [*]
+  </div>
+
+  <p style="font-size: 0.9em; color: var(--muted);">
+    <strong>Stale-filed</strong> is the failure mode that v2.35.0 specifically addressed — a bead whose chain completed and PR merged, but whose spec frontmatter never got the writeback. Pre-v2.35.0, this state was effectively terminal until manual housekeeping; post-v2.35.0, the zombie-reconciler catches it within 5 minutes.
+  </p>
+</section>
+
+<section id="failure-matrix">
+  <h2>Failure modes mapped to recovery mechanisms</h2>
+
+  <p>Every known failure mode now has a corresponding recovery. The matrix below records which mechanism catches which mode. Modes Mode A / B / C are the named worker-exit categories from the chain-failure-modes vocabulary; the rest are state-divergence failures.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 30%;">Failure mode</th>
+        <th style="width: 40%;">Recovery mechanism</th>
+        <th style="width: 20%;">Layer</th>
+        <th style="width: 10%;">Latency</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Mode A &mdash; API 529 (Overload)</td>
+        <td><code>claude_retry.py</code></td>
+        <td><span class="tag tag-hybrid">Wrapper</span></td>
+        <td>seconds</td>
+      </tr>
+      <tr>
+        <td>Mode B &mdash; drain-ack park (per-turn cap)</td>
+        <td><code>sdlc-drain-ack-recover</code></td>
+        <td><span class="tag tag-migrated">Order (event)</span></td>
+        <td>event-driven</td>
+      </tr>
+      <tr>
+        <td>Mode C &mdash; alive-but-idle stall</td>
+        <td><code>sdlc-alive-idle-detector</code></td>
+        <td><span class="tag tag-hybrid">Order (5m)</span></td>
+        <td>~5 min</td>
+      </tr>
+      <tr>
+        <td>Finalizer-writeback failure (stale-filed spec)</td>
+        <td><code>sdlc-zombie-reconciler</code></td>
+        <td><span class="tag tag-pack">Order (5m)</span></td>
+        <td>~5 min</td>
+      </tr>
+      <tr>
+        <td>Cross-batch dep waiting on predecessor merge</td>
+        <td><code>sdlc-cross-batch-dep-watcher</code></td>
+        <td><span class="tag tag-pack">Order (5m)</span></td>
+        <td>~5 min</td>
+      </tr>
+      <tr>
+        <td>Stale-filed predecessor at successor filing time</td>
+        <td><code>_predecessor_already_merged</code> defensive bd-show</td>
+        <td><span class="tag tag-pack">Chain</span></td>
+        <td>synchronous</td>
+      </tr>
+      <tr>
+        <td>PR drifted behind <code>main</code></td>
+        <td><code>sdlc-rebase-watcher</code></td>
+        <td><span class="tag tag-pack">Order (event)</span></td>
+        <td>event-driven</td>
+      </tr>
+      <tr>
+        <td>bd &harr; gh state divergence (PR closed/merged but bd unaware)</td>
+        <td><code>sdlc-stale-pr-sweeper</code></td>
+        <td><span class="tag tag-pack">Order (5m)</span></td>
+        <td>~5 min</td>
+      </tr>
+      <tr>
+        <td>Chain stalled (no observable progress in N minutes)</td>
+        <td><code>sdlc-stall-detector</code></td>
+        <td><span class="tag tag-pack">Order (15m)</span></td>
+        <td>~15 min</td>
+      </tr>
+      <tr>
+        <td>Periodic order itself stalled (meta-recovery)</td>
+        <td><code>sdlc-order-stall-detector</code></td>
+        <td><span class="tag tag-gas">Order (15m)</span></td>
+        <td>~15 min</td>
+      </tr>
+      <tr>
+        <td>Budget exhaustion (per-bead retry budget hit)</td>
+        <td><code>sdlc-exhausted-bead-retry</code></td>
+        <td><span class="tag tag-hybrid">Order (5m)</span></td>
+        <td>~5 min</td>
+      </tr>
+      <tr>
+        <td>Reviewer-flagged tech-debt finding</td>
+        <td>Sub-A classifier + sub-B issue-filer (auto); sub-C autospawn (manual)</td>
+        <td><span class="tag tag-pack">Post-finalizer</span></td>
+        <td>per-PR</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p style="font-size: 0.9em; color: var(--muted);">
+    Layer tags map to the gas-city-boundary classification:
+    <span class="tag tag-pack">Pack</span> belongs here;
+    <span class="tag tag-gas">Gas city candidate</span> should be upstreamed;
+    <span class="tag tag-hybrid">Hybrid</span> primitive belongs in gas city, policy in pack;
+    <span class="tag tag-migrated">Migrated</span> substrate is already upstream, recovery action correctly pack-side.
+  </p>
+</section>
+
+<section id="cadence-timeline">
+  <h2>When each mechanism fires</h2>
+
+  <p>A 30-minute window showing the periodic-order cadences. The five 5m orders form a synchronized heartbeat; the 15m detectors layer above; the event-driven orders (drain-ack-recover, rebase-watcher) fire on the substrate's typed events rather than on a clock. The 30m+ orders are workflow automation rather than recovery and are omitted.</p>
+
+  <div class="cadence-timeline">
+
+    <div class="cadence-label">zombie-reconciler</div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">cross-batch-dep-watcher</div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">stale-pr-sweeper</div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">alive-idle-detector</div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">exhausted-bead-retry</div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-hybrid"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">stall-detector</div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire-pack"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">order-stall-detector</div>
+    <div class="cadence-cell cadence-fire"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell cadence-fire"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+    <div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div><div class="cadence-cell"></div>
+
+    <div class="cadence-label">drain-ack-recover</div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+
+    <div class="cadence-label">rebase-watcher</div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+    <div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div><div class="cadence-cell cadence-fire-event"></div>
+
+    <div class="cadence-axis">
+      <div class="cadence-tick major">0</div>
+      <div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div>
+      <div class="cadence-tick major">5m</div>
+      <div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div>
+      <div class="cadence-tick major">10m</div>
+      <div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div>
+      <div class="cadence-tick major">15m</div>
+      <div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div>
+      <div class="cadence-tick major">20m</div>
+      <div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div>
+      <div class="cadence-tick major">25m</div>
+      <div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div><div class="cadence-tick"></div>
+    </div>
+  </div>
+
+  <p style="font-size: 0.85em; color: var(--muted); margin-top: 1em;">
+    Solid bars are scheduled fires; striped bars represent event-triggered orders that fire on the substrate's typed events. The five 5m orders are color-coded: <span style="background: var(--pack); color: white; padding: 0 6px; border-radius: 2px;">pack-correct</span> in orange, <span style="background: var(--hybrid); color: white; padding: 0 6px; border-radius: 2px;">hybrid</span> in purple, <span style="background: var(--accent); color: white; padding: 0 6px; border-radius: 2px;">gas-city-candidate</span> in blue. The clustering at 0/5/10/15/20/25 reflects the cooldown trigger model — every order on its own clock, no coordination needed because all actions are idempotent.
+  </p>
+</section>
+
+<section id="post-merge-sequence">
+  <h2>The canonical post-merge recovery cascade</h2>
+
+  <p>The happy path after a PR merges, when the chain's finalizer has parked the bead at <code>final_state=pr_open_for_human</code> and (possibly) failed to write back the spec frontmatter. This sequence is what made the v2.35.0 / v2.35.1 / v2.35.2 arc operationally meaningful — pre-v2.35.0, the cascade was operator-driven; post-v2.35.2, it runs automatically within ~17 minutes worst case.</p>
+
+  <div class="mermaid">
+sequenceDiagram
+    participant H as Operator
+    participant GH as GitHub
+    participant Z as zombie-reconciler
+    participant BD as bd / spec frontmatter
+    participant W as cross-batch-dep-watcher
+    participant SR as session reconciler
+    participant POOL as Worker pool
+
+    H->>GH: Merge PR
+    GH-->>BD: PR state = merged
+
+    Note over Z: Next 5m tick
+    Z->>GH: gh pr list --state merged
+    GH-->>Z: PR matches Signal 1/2/3
+    Z->>BD: stories.py archive (PR url, sha)
+    Z->>BD: bd update --set-metadata final_state=merged
+
+    Note over W: Next 5m tick
+    W->>BD: list --status=deferred + jq cross_batch_dep_predecessors
+    W->>BD: bd show predecessor
+    BD-->>W: final_state = merged ✓
+    W->>BD: bd update successor --defer "" --unset-metadata
+
+    Note over SR: Next ~7m tick
+    SR->>BD: bd ready (filter routed_to)
+    BD-->>SR: successor admittable
+    SR->>POOL: spawn worker session
+    POOL-->>H: Chain progresses
+  </div>
+
+  <p style="font-size: 0.9em; color: var(--muted);">
+    Worst-case latency: <code>5m + 5m + ~7m ≈ 17m</code>. Best case (all three ticks happen to align): under a minute. Expected case: ~8-10 minutes. The system isn't event-driven end-to-end; it's three independent observers each running on its own clock, converging on the same eventual state.
+  </p>
+</section>
+
+<section id="boundary">
+  <h2>Gas city primitives vs pack policy</h2>
+
+  <p>Gas city is explicit about where its scope ends. Three load-bearing passages from the gas city repo set the boundary:</p>
+
+  <div class="callout">
+    <p class="callout-quote">"A capability belongs in the SDK only if all three hold. If any condition fails, it belongs in the consumer layer."</p>
+    <span class="callout-cite">— gas city <code>engdocs/contributors/primitive-test.md:9-13</code>. The three conditions are Atomicity (agents need it race-free), Bitter Lesson (becomes more useful as models improve), and ZFC (transport rather than cognition).</span>
+  </div>
+
+  <div class="callout">
+    <p class="callout-quote">"Go handles transport, not reasoning. If a line of Go contains a judgment call, it's a violation. An <code>if stuck then restart</code> is framework intelligence. Move the decision to the prompt."</p>
+    <span class="callout-cite">— gas city <code>AGENTS.md:194-197</code> (Zero Framework Cognition).</span>
+  </div>
+
+  <div class="callout">
+    <p class="callout-quote">"Multiple independent observers check the same state idempotently. Redundancy is the reliability mechanism."</p>
+    <span class="callout-cite">— gas city <code>AGENTS.md:203-206</code> (Nondeterministic Idempotence). The pack's nine cooldown-triggered periodic orders are an unintentional implementation of this pattern.</span>
+  </div>
+
+  <p>Applying those principles, the eleven mechanisms break down as follows:</p>
+
+  <div class="boundary-grid">
+    <div class="boundary-col boundary-gas">
+      <h4>Gas city's scope</h4>
+      <p style="font-size: 0.9em; color: var(--muted); margin-top: 0;">Substrate: provides observation, persistence, dispatch.</p>
+      <ul>
+        <li>Typed events (<code>bead.closed</code>, <code>session.drain_acked_with_assigned_work</code>, ...)</li>
+        <li>Bead store as persistent shared state</li>
+        <li>Order scheduler with cooldown / event triggers</li>
+        <li>Session lifecycle + crashTracker + idleTracker</li>
+        <li>One reconciler primitive: <code>reconcileSessionBeads()</code> for session-to-config drift</li>
+        <li>SDK self-sufficiency: works with only the controller running</li>
+      </ul>
+    </div>
+    <div class="boundary-col boundary-pack">
+      <h4>Pack's scope</h4>
+      <p style="font-size: 0.9em; color: var(--muted); margin-top: 0;">Policy: composes the substrate into SDLC-shaped recovery.</p>
+      <ul>
+        <li>SDLC-domain state (spec frontmatter, cross-batch dep metadata, retry budgets)</li>
+        <li>Eight additional reconcilers above the bd / gh layers</li>
+        <li>Recovery <em>actions</em> on top of gas city's typed events (drain-ack-recover, rebase-watcher)</li>
+        <li>Failure-mode-specific posture (HIGH-only confidence, fail-closed on destructive)</li>
+        <li>Provider-shaped retry (claude_retry.py wraps Claude Code specifically)</li>
+        <li>Operator-facing escalation routing via <code>sdlc-notify.sh</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Per-mechanism classification</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 28%;">Mechanism</th>
+        <th style="width: 14%;">Classification</th>
+        <th>Reasoning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>sdlc-zombie-reconciler</code></td>
+        <td><span class="tag tag-pack">Pack-correct</span></td>
+        <td>Spec frontmatter is pack-domain; gas city doesn't know what a "spec" is. Stays.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-cross-batch-dep-watcher</code></td>
+        <td><span class="tag tag-pack">Pack-correct</span></td>
+        <td><code>cross_batch_dep_predecessors</code> metadata is pack-defined. Stays.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-stale-pr-sweeper</code></td>
+        <td><span class="tag tag-pack">Pack-correct</span></td>
+        <td>PR/branch concepts live outside gas city's domain. Stays.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-rebase-watcher</code></td>
+        <td><span class="tag tag-pack">Pack-correct</span></td>
+        <td>The event is gas-city (<code>bead.closed</code>); the response is GitHub-domain. Stays.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-stall-detector</code></td>
+        <td><span class="tag tag-pack">Pack-correct</span></td>
+        <td>Phase SLOs (worker 120m, finalizer 15m) are pack policy. Stays.</td>
+      </tr>
+      <tr>
+        <td><code>_predecessor_already_merged</code> defensive <code>bd show</code></td>
+        <td><span class="tag tag-pack">Pack-correct</span></td>
+        <td>The "spec frontmatter is stale, bead is canonical" judgment is SDLC-domain. Stays.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-order-stall-detector</code></td>
+        <td><span class="tag tag-gas">Gas-city candidate</span></td>
+        <td>Self-monitoring of dispatch is pure transport (compare two timestamps). Passes all three Primitive Test conditions. Strongest upstream case.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-alive-idle-detector</code></td>
+        <td><span class="tag tag-hybrid">Hybrid</span></td>
+        <td>Gas city has <code>idleTracker</code> for I/O-shaped idle; the pack's detector reads bead-update age (work-shaped idle). The TUI pane-match recovery action stays pack-side; the work-staleness primitive could be upstreamed.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-exhausted-bead-retry</code></td>
+        <td><span class="tag tag-hybrid">Hybrid</span></td>
+        <td>Inverts gas city's in-memory <code>crashTracker</code>: tracks per-bead retry budget, persisted in metadata. The persistent-retry-budget primitive could be upstreamed; the SDLC recovery policy stays pack-side.</td>
+      </tr>
+      <tr>
+        <td><code>claude_retry.py</code></td>
+        <td><span class="tag tag-hybrid">Hybrid</span></td>
+        <td>The Claude-Code-specific retry wrapper is consumer-domain. The supervisor-level "session exhausted, requeue work" backstop overlaps with <code>sdlc-exhausted-bead-retry</code>.</td>
+      </tr>
+      <tr>
+        <td><code>sdlc-drain-ack-recover</code></td>
+        <td><span class="tag tag-migrated">Migrated already</span></td>
+        <td>Substrate is upstream as gascity#2380 (the typed <code>session.drain_acked_with_assigned_work</code> event). Recovery action correctly belongs to the pack per the SDK's "no decision logic in Go" rule. Canonical example of the right boundary.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>The drain-ack-recover precedent</h3>
+
+  <p>One mechanism above is worth dwelling on. The operator's <a href="https://github.com/gastownhall/gascity/issues/2293">gascity#2293</a> filing proposed a reactive controller-side recovery: "Issue a fresh session spawn against the same pool template; the new session attaches to the same bead and resumes." Gas city's response (PR #2380) was explicit:</p>
+
+  <div class="callout">
+    <p class="callout-quote">"The reconciler stops at signal emission — it does NOT commit worktree changes, push, clear the assignee, or respawn. Pack-side subscribers own recovery policy (commit-and-push, clear-and-respawn, escalate) per the SDK's ZFC + zero-hardcoded-roles rules."</p>
+    <span class="callout-cite">— gascity PR #2380 description.</span>
+  </div>
+
+  <p>That is the design statement. The pack's <code>sdlc-drain-ack-recover</code> order is the intended shape of recovery on top of gas city. The substrate emits a typed event; the consumer decides what to do.</p>
+</section>
+
+<section id="intuition">
+  <h2>Four patterns built by intuition that mirror gas city's stated principles</h2>
+
+  <p>Several patterns appear in the pack that match gas city's design principles word-for-word, often without that doc having been read before the pattern was built. They surfaced from the work and converged on the same shape.</p>
+
+  <h3>1. Periodic redundant observers as the reliability primitive</h3>
+
+  <p>Eight of the nine pack orders fire on cooldowns of 5-30 minutes. Each is idempotent on its target state. Each can run concurrently with operator intervention without corrupting anything. The inline comment in <code>sdlc-drain-ack-recover.sh:18-19</code> reads:</p>
+
+  <div class="callout">
+    <p class="callout-quote">"Idempotency invariant: reset-to-pristine. Every step is safe to repeat; subsequent runs after success are no-ops."</p>
+    <span class="callout-cite">— pack <code>sdlc-drain-ack-recover.sh:18-19</code></span>
+  </div>
+
+  <p>Gas city's <code>AGENTS.md:203-206</code> describes the same pattern as Nondeterministic Idempotence:</p>
+
+  <div class="callout">
+    <p class="callout-quote">"Multiple independent observers check the same state idempotently. Redundancy is the reliability mechanism."</p>
+    <span class="callout-cite">— gas city <code>AGENTS.md:203-206</code></span>
+  </div>
+
+  <p>Same idea, expressed independently. The pack fell into this shape because periodic-with-idempotent was the only way to recover safely from arbitrary failure points.</p>
+
+  <h3>2. Fail-closed at the trust boundary, fail-open on weak signals</h3>
+
+  <p>The zombie reconciler ships HIGH-only v1 detection:</p>
+
+  <div class="callout">
+    <p class="callout-quote">"fail-open on weak signals — better to leave a zombie alive than to archive the wrong spec"</p>
+    <span class="callout-cite">— pack <code>sdlc-zombie-reconciler.sh:25</code></span>
+  </div>
+
+  <p>The drain-ack recovery script lists six distinct exit codes, one per recovery step, and bails with operator-visible state on any failure. Same rule: destructive action requires high confidence; informational action allows weak confidence. Gas city's <code>orders.md</code> encodes the same posture in its order failure-modes section — failed orders emit events but do not retry.</p>
+
+  <h3>3. Typed events as the integration substrate, not RPC</h3>
+
+  <p>The pack's <code>sdlc-drain-ack-recover</code> subscribes to <code>session.drain_acked_with_assigned_work</code>. The <code>sdlc-rebase-watcher</code> subscribes to <code>bead.closed</code>. Neither polls a "did the supervisor do X yet" endpoint. The choice — typed events as a public surface, never <code>map[string]any</code> over the wire — is gas city's:</p>
+
+  <div class="callout">
+    <p class="callout-quote">"Typed events. Every constant in <code>events.KnownEventTypes</code> must have a registered payload."</p>
+    <span class="callout-cite">— gas city <code>AGENTS.md:122-128</code></span>
+  </div>
+
+  <h3>4. Drift correction over command sequences</h3>
+
+  <p>The zombie reconciler's design intent — periodically reconcile spec frontmatter against the bead + PR layer of truth — directly mirrors gas city's <code>reconcileSessionBeads()</code> (~3300 lines at <code>cmd/gc/session_reconciler.go</code>). Both compute "want" (config / spec authoring) versus "have" (live runtime / bead state) and emit corrective actions only on divergence. The pack built spec-layer reconciliation because the failure mode showed up at the spec layer; gas city built session-layer reconciliation because that failure shows up at the session layer. Same shape, different domain.</p>
+</section>
+
+<section id="cross-cutting">
+  <h2>The cross-cutting observation</h2>
+
+  <p>Eight of nine periodic orders implement variants of the same shape: read live state from <code>bd</code> / <code>gh</code> / <code>gc session list</code> / <code>gc order history</code>, detect divergence from an invariant, act idempotently, rate-limit, fail-closed.</p>
+
+  <p><strong>The pack has assembled a custom state-reconciler framework</strong> from cooldown triggers, exec orders, bash + python + jq, and <code>sdlc-notify.sh</code>. Gas city has one specific reconciler (<code>reconcileSessionBeads</code>) cooked into the supervisor, but it lacks a <code>[[reconciler]]</code> primitive that consumers can register against.</p>
+
+  <p>The class problem the inventory reveals: gas city ships one reconciler today; it doesn't ship a Reconciler primitive. A first-class <code>[[reconciler]]</code> config block — with a check command, an action command, a rate-limit clause, and an event-emission policy on action-taken — would compress 80% of the pack's order scripts into config. The remaining 20% (zombie spec detection, predecessor-merged defensive lookup) would still need custom logic because their judgments fail Bitter Lesson and ZFC.</p>
+
+  <p>This is bigger than any single mechanism fix. Worth filing upstream as a design discussion rather than as a bug.</p>
+</section>
+
+<section id="coverage-history">
+  <h2>How the inventory accreted</h2>
+
+  <p>Each recovery mechanism shipped in response to a failure mode that surfaced in production. The arc:</p>
+
+  <ul class="coverage-tl">
+    <li>
+      <span class="version">v2.7.0</span> <span class="date">2026-05-11</span><br>
+      <strong>Merge-failure recovery: watcher order</strong> — first periodic-order recovery; sets the pattern others follow.
+    </li>
+    <li>
+      <span class="version">v2.10.0</span> <span class="date">2026-05-14</span><br>
+      <strong>Reviewer merge-readiness recommendation tiers</strong> + delayed-merge order — workflow automation, not strictly recovery.
+    </li>
+    <li>
+      <span class="version">v2.21.4</span> <span class="date">~2026-05-22</span><br>
+      <strong><code>sdlc-alive-idle-detector</code></strong> — Mode C alive-but-idle stall recovery, validated end-to-end on T7920.
+    </li>
+    <li>
+      <span class="version">v2.24.0</span> <span class="date">~2026-05-22</span><br>
+      <strong>Zombie-reconciler v1</strong> (pack #92) — periodic story-spec drift reconciliation, HIGH-confidence only.
+    </li>
+    <li>
+      <span class="version">v2.30.x</span> <span class="date">~2026-05-23</span><br>
+      <strong><code>sdlc-rebase-watcher</code></strong> (pack #34, PR #37) — rebases stale PRs onto current main.
+    </li>
+    <li>
+      <span class="version">v2.32.0</span> <span class="date">2026-05-24</span><br>
+      <strong>Cross-batch dep machinery</strong> (#152 + #154) — <code>bd dep add</code> at filing time + <code>sdlc-cross-batch-dep-watcher</code>.
+    </li>
+    <li>
+      <span class="version">v2.34.0</span> <span class="date">2026-05-25</span><br>
+      <strong>Cross-batch dep edge-case fixes</strong> (#164) — face 1 (within-batch chain) + face 2 (defensive <code>bd show</code> in <code>_predecessor_already_merged</code>).
+    </li>
+    <li>
+      <span class="version">v2.35.0</span> <span class="date">2026-05-25</span><br>
+      <strong>Zombie-reconciler post-merge writeback</strong> (#170) — script extension drops <code>"filed"</code> from <code>TERMINAL_STATUSES</code>; bash wrapper adds <code>bd update --set-metadata final_state=merged</code>.
+    </li>
+    <li>
+      <span class="version">v2.35.1</span> <span class="date">2026-05-25</span><br>
+      <strong>Reconciler cadence calibrated</strong> (#173 + #174) — interval 24h → 5m + header refresh.
+    </li>
+    <li>
+      <span class="version">v2.35.2</span> <span class="date">2026-05-25</span><br>
+      <strong>Cross-batch-dep-watcher actually sees its workload</strong> (#179) — filter <code>--status=open</code> → <code>--status=deferred</code>.
+    </li>
+  </ul>
+
+  <p>Three substantive recovery fixes in a single day (v2.35.0 / v2.35.1 / v2.35.2) closed the last gap in the automated post-merge recovery path. End-to-end automation from PR-merge to next-bead-spawn now runs without operator intervention.</p>
+</section>
+
+<section id="next-steps">
+  <h2>Next-step recommendations</h2>
+
+  <h3>Strongest upstream case: order-loop self-monitoring</h3>
+
+  <p><code>sdlc-order-stall-detector</code> recovers a supervisor reliability concern — the dispatch loop missing fires. The motivating incident was the rebase-watcher non-fire that ran silent for ~9 hours overnight. By gas city's own Primitive Test, this fully qualifies as an SDK feature:</p>
+
+  <table>
+    <thead><tr><th>Primitive Test</th><th>Result</th><th>Reasoning</th></tr></thead>
+    <tbody>
+      <tr><td>Atomicity</td><td>✅</td><td>Only the supervisor knows authoritative fire-history</td></tr>
+      <tr><td>Bitter Lesson</td><td>✅</td><td>A smarter model doesn't reduce the need to self-monitor dispatch</td></tr>
+      <tr><td>ZFC</td><td>✅</td><td>Pure transport — "compare two timestamps"</td></tr>
+    </tbody>
+  </table>
+
+  <p>Suggested upstream API: a new built-in observation order, or a <code>[daemon] order_stall_warn_factor = 2</code> config knob that emits <code>order.stalled</code> events. The pack retains its throttle-and-notify policy on the consumer side.</p>
+
+  <h3>Substrate case worth raising: a <code>[[reconciler]]</code> primitive</h3>
+
+  <p>The cross-cutting observation. Worth filing as a <code>feat:</code> issue for design discussion rather than as a bug. The pack would migrate its zombie / cross-batch-dep / stale-PR / rebase orders to the primitive once it lands; alive-idle-detector and exhausted-bead-retry would stay pack-shaped because their checks are not single-shell-command-shaped.</p>
+
+  <h3>Pack-internal review (no upstream filing)</h3>
+
+  <ul>
+    <li><code>sdlc-alive-idle-detector</code>'s pane-signature match relies on TUI glyphs that may drift as Claude Code evolves. Worth validating against current TUI variants before the next pack release.</li>
+    <li><code>sdlc-exhausted-bead-retry</code> + <code>claude_retry.py</code> form a two-tier retry. Worth checking the retry-count metadata is observable through <code>bd show</code> so exhaustion is traceable without grepping logs.</li>
+  </ul>
+</section>
+
+<footer>
+  <p><strong>Sources</strong></p>
+  <ul>
+    <li>Gas city repository: <a href="https://github.com/gastownhall/gascity">github.com/gastownhall/gascity</a> at commit <code>6acc1692</code> (2026-05-25)</li>
+    <li>SDLC discipline pack: <a href="https://github.com/reggieperry/sdlc-discipline-pack">github.com/reggieperry/sdlc-discipline-pack</a> at v2.35.2</li>
+    <li>Pack repository, recovery scripts under <code>assets/scripts/sdlc-*.sh</code></li>
+    <li>Pack repository, order configs under <code>orders/*.toml</code></li>
+    <li>Steve Yegge — <a href="https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04">Welcome to Gas Town</a>, <a href="https://steve-yegge.medium.com/welcome-to-gas-city-57f564bb3607">Welcome to Gas City</a></li>
+    <li>Public thesis: <a href="https://github.com/reggieperry/sdlc-discipline-pack/blob/main/docs/safe-agentic-engineering-thesis.md">safe-agentic-engineering-thesis.md</a></li>
+  </ul>
+
+  <p style="margin-top: 1.5em; font-size: 0.85em;">
+    Authored from deep-reason agent analyses run 2026-05-25 PT against the gas city repo (commit <code>6acc1692</code>) and the pack repo (v2.35.2). The boundary classification and the "what you built by intuition" observations are the agent's quote-grounded findings; the visualizations are this document's contribution to make the inventory comprehensible at a glance.
+  </p>
+</footer>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    themeVariables: {
+      primaryColor: '#ecf0f5',
+      primaryTextColor: '#1f2328',
+      primaryBorderColor: '#5b6f8d',
+      lineColor: '#6e7681',
+      fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+    },
+    sequence: { useMaxWidth: true },
+    stateDiagram: { useMaxWidth: true }
+  });
+</script>
+
+</body>
+</html>
