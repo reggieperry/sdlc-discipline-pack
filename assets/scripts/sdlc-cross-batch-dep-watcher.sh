@@ -160,8 +160,12 @@ EOF
 walk_rig() {
     local rig="$1"
 
+    # Filter on --status=deferred: the marker metadata sits on deferred
+    # beads by construction (stories.py:cmd_file sets defer + metadata
+    # together per pack #154). A --status=open filter would exclude the
+    # watcher's entire workload — see pack #179.
     local beads_json
-    beads_json=$(gc bd --rig "$rig" list --status=open --limit 5000 --json 2>/dev/null || echo "[]")
+    beads_json=$(gc bd --rig "$rig" list --status=deferred --limit 5000 --json 2>/dev/null || echo "[]")
     if ! echo "$beads_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
         return 0
     fi
