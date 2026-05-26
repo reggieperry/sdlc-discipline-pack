@@ -43,6 +43,30 @@ The pack's `agents/worker/prompt.template.md` reads the spec when the worker sta
 
 The reviewer also reads the spec when it cross-checks against the diff. If the spec has a `metadata.source_audit_doc` pointer (set in frontmatter as `source_audit_doc: <path>`), the reviewer enumerates the audit's named identifiers and cross-checks them against the spec's `**In:**` and `**Out:**` lists. This is an opt-in safeguard against scope-narrowing during chain execution.
 
+## Story-decomposition judgment
+
+Some work fits one chain run; some work does not. Stories that are too large bounce on reviewer flags or run past the differential gate's appetite. Stories that are too small fail to amortize the per-chain fixed cost. Three heuristics capture most of the calibration.
+
+**Diff size against reviewer appetite.** A story whose implementation diff is likely to exceed roughly 400-600 lines of change across multiple files is a candidate for decomposition. At that diff size the reviewer is more likely to flag scope sprawl and the slop-reviewer's pattern catalogue runs against more code than it was tuned for. The threshold is not exact; it is the size at which the chain's per-phase audits stop being a uniform pass and start finding things to question. Splitting along natural cleavage lines — value object first, then carrier, then consumer — keeps each diff inside the appetite.
+
+**Sensitive-file count.** A story that touches more than one or two sensitive files is a candidate for decomposition. Each sensitive-file touch carries reviewer cost, and concurrent stories that both touch the same sensitive file create rebase-storm risk that the differential gate's baseline-capture step interacts badly with. Splitting reduces both the per-story reviewer load and the cross-story coordination burden.
+
+**Independent test surfaces.** When a story's acceptance criteria split cleanly into two groups whose tests do not share fixtures, scaffolding, or domain reasoning, the story is two stories waiting to be separated. A property test for a new value object and an integration test for its consumer use different test machinery; the worker's mental model is also different. Splitting along the test boundary lets each chain run optimize for one thinking mode.
+
+A five-stage refactor arc that landed in mid-2026 — a value object, a dormant carrier field, a threading change, a consumer update, and a required-field promotion — illustrates the discipline at the upper bound. Each stage was constructible as a separate chain run with a distinct scope fence; each diff stayed inside reviewer appetite; each had its own test surface. The arc shipped through five chains over a single working session rather than through one large chain that would have routed `human_required` on diff size alone. The dependency line between stages was tight, but the chains themselves ran independently.
+
+## The scope-section discipline
+
+The `**In:**` and `**Out:**` sections are how the spec talks to the chain about scope. The worker reads both before claiming any acceptance criterion; the reviewer cites both when auditing whether the diff stayed within bounds. Writing them well is one of the highest-leverage operator activities in story authoring.
+
+**What belongs in `**In:**`.** Concrete file paths, the behavior changes intended for each path, the test additions that prove the behavior. The list should be explicit and finite — the worker is expected to touch every file named and nothing else. If a change requires creating a new file, the file's path goes in the list, not "a new module for X." Vagueness in `**In:**` produces wandering workers; precision produces convergent ones.
+
+**What belongs in `**Out:**`.** Three categories of work the spec author wants the worker to leave alone. First, cross-cutting refactors that have not been agreed to — opportunistic cleanup the worker might be tempted to fold in. Second, fixture or test cleanup that is tempting but unscheduled — the worker should not rewrite test infrastructure to make their job easier. Third, related-but-separate work that belongs in a different story — adjacent stories under the same parent often share vocabulary, and the scope fence prevents one story from claiming work the next is supposed to do.
+
+The trap to avoid is writing `**Out:**` sections so restrictive that they prevent natural cleanup. A worker who notices a typo in a docstring they are otherwise modifying should fix the typo; a worker who notices an unused import in a file they are restructuring should remove it. The `**Out:**` list should fence off work that is clearly someone else's domain, not work that lives inside the file the worker is already editing.
+
+A good test of an `**Out:**` section: read each bullet and ask "would the chain bounce on this if the worker accidentally did it?" Items where the answer is "yes — this would route review_encouraged or worse" belong in the list. Items where the answer is "no — this would be fine but unscheduled" can usually be left out; the reviewer's scope check catches them anyway. The list earns its place when it prevents specific failure modes, not when it enumerates everything the story does not do. The pattern that ships best: short `**In:**` (two to five items), short `**Out:**` (three to six items), each item one line.
+
 ## The audit pattern
 
 Both the human and the computer drift. In normal operation, the operator drifts away from precise recall of what shipped, what's planned, and what state the queue is in. The computer drifts away from current truth because memory snapshots age. The audit pattern is what aligns everyone back to ground truth.
@@ -103,6 +127,20 @@ Within both groups, two structural constraints apply:
 - **Cost band against quota headroom.** Each chain run consumes quota or API tokens against the operator's account. Estimate before slinging using the pack's per-band cost ranges (see `docs/research/` for empirical data if available, or the operator's own observed averages). Check current quota usage before committing substantive work.
 
 The "anytime-idle slot" is not a separate tier — it's the natural mode for any Group A or Group B story whose predecessors are released. The slot fills with whatever fits the operator's current focus window. Small slot, small story; long slot, substantive story.
+
+## Cost-band estimation by story shape
+
+Every chain run consumes API tokens or subscription allowance. Estimating cost before slinging is the difference between burning quota on a story whose budget could have funded three smaller ones and dispatching with confidence that the spend is proportionate. The bands below derive from empirical measurements on a project running the pack's v2.10.x defaults (worker and reviewer on Opus, tester and documenter and finalizer on Sonnet).
+
+**The five bands.** *Trivial* (a docstring fix, a typo, a one-line edit) lands in the $45-60 range across 35-45 minutes. *Moderate-low* (a single property test, a single-function docstring expansion, a one-file additive change) lands at $55-70 across 40-50 minutes. *Moderate-high* (an Extract Function across two or three files, a CLI option with tests, a multi-file behavior change without sensitive-file touches) lands at $75-120 across 50-70 minutes. *Substantive* (a new module of roughly 100-200 lines, a multi-file refactor with restructuring, a sensitive-file touch with non-trivial reviewer load) lands at $135-300 across 75-120 minutes. *Phase-architectural* (replacing a pipeline stage, adding a domain concept, threading a new type through several modules) lands at $220-550 or more across 90-180 minutes.
+
+**The single-chain wall-clock band.** A clean run with no bounces lands in the 45- to 105-minute range for the first three bands. Wall clock that exceeds 2x the band's upper bound is a signal worth investigating — usually a tester or reviewer bounce, occasionally a supervisor stall. 3x or more usually means the story was misclassified at sling time and should have been decomposed.
+
+**Bounces are additive.** A tester-to-worker bounce adds $5-10. A reviewer-to-worker bounce on a blocker finding adds $30-60. A rebase-iteration bounce (finalizer routes the worker back to resolve a merge conflict with main) adds $10-25. One reviewer bounce can double a moderate-low story's cost; budgeting for at least one bounce on substantive stories is realistic.
+
+**Cost shapers.** Worker and reviewer phases account for roughly 90% of chain cost; tester, documenter, and finalizer each sit in the $1-3 range. Reviewer cost correlates with plan complexity — the number of acceptance criteria and the depth of plan structure — not with diff size. Sensitive files raise reviewer load. Property tests and domain-reasoning work raise worker cost. Pure-additive diffs and single-file edits lower it.
+
+**Multi-story budgeting.** When several stories are in flight, the per-story estimates compose linearly for cost and partially in parallel for wall clock. A burst of nine mechanical stories on the case-study pack landed in 95 minutes of wall clock against roughly 9 hours of cumulative chain time. Budget cost against the cumulative sum; budget operator attention against the wall-clock burst.
 
 ## Pre-sling verification
 
