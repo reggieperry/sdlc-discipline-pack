@@ -93,7 +93,11 @@ RIG_ROOT = Path(sys.argv[1])
 RIG_NAME = sys.argv[2]
 
 STORIES_DIR = RIG_ROOT / "stories"
-TERMINAL_STATUSES = {"filed", "in-flight", "closed"}
+# pack #170: status=filed is NOT skipped — when a chain's finalizer fails
+# to write back merged_pr after a human-merged PR, the spec is stuck at
+# status=filed even though the PR is merged. The reconciler picks up the
+# slack via the existing HIGH-confidence detection paths.
+TERMINAL_STATUSES = {"in-flight", "closed"}
 
 # v2.29.5: import the canonical frontmatter parser from stories.py rather
 # than hand-rolling a divergent reimplementation. The two parsers used to
@@ -212,11 +216,13 @@ def main() -> None:
         bead = query_bd_for_story(story_id)
         pr_url = ""
         pr_sha = ""
+        bead_id = ""
         signal = ""
         if bead is not None:
             meta = bead.get("metadata") or {}
             pr_url = meta.get("pr_url") or ""
             pr_sha = meta.get("final_merged_sha") or ""
+            bead_id = bead.get("id") or ""
             signal = "bead-metadata"
 
         if not signal:
@@ -228,6 +234,10 @@ def main() -> None:
                 pr_url = pr.get("url") or ""
                 merge_commit = pr.get("mergeCommit") or {}
                 pr_sha = (merge_commit.get("oid") if isinstance(merge_commit, dict) else "") or ""
+                # pack #170: for Signal 2/3, the bead-id is the spec's
+                # filed_as_bead — the bash wrapper needs it to advance the
+                # bead's final_state to "merged" after archiving the spec.
+                bead_id = filed_as_bead
                 signal = "pr-title-or-branch"
 
         if not signal:
@@ -240,6 +250,7 @@ def main() -> None:
             "signal": signal,
             "pr_url": pr_url,
             "pr_sha": pr_sha,
+            "bead_id": bead_id,
         }
         print(json.dumps(action))
 
@@ -256,10 +267,11 @@ PYEOF
     local archive_failed=0
     while IFS= read -r action_json; do
         [ -z "$action_json" ] && continue
-        local story_id pr_url pr_sha
+        local story_id pr_url pr_sha bead_id
         story_id=$(echo "$action_json" | jq -r '.story_id // empty')
         pr_url=$(echo "$action_json" | jq -r '.pr_url // empty')
         pr_sha=$(echo "$action_json" | jq -r '.pr_sha // empty')
+        bead_id=$(echo "$action_json" | jq -r '.bead_id // empty')
         [ -z "$story_id" ] && continue
 
         local cmd=("python3" "$STORIES_PY" "archive" "$story_id")
@@ -269,6 +281,17 @@ PYEOF
         if (cd "$rig_root" && "${cmd[@]}" >/dev/null 2>&1); then
             archived=$((archived + 1))
             echo "zombie-reconciler: rig=$rig archived $story_id (pr=$pr_url)" >&2
+            # pack #170: advance the predecessor bead's final_state to
+            # "merged" so the cross-batch dep watcher (v2.32.0) clears
+            # downstream defers on its next tick. Idempotent at the bd
+            # layer — calling with the same value is a no-op. Best-effort:
+            # a failure here does not roll back the spec archive, which is
+            # the load-bearing operation.
+            if [ -n "$bead_id" ]; then
+                bd -C "$rig_root" update "$bead_id" --set-metadata final_state=merged \
+                    >/dev/null 2>&1 || \
+                    echo "zombie-reconciler: rig=$rig bd update $bead_id final_state=merged FAILED (non-fatal)" >&2
+            fi
         else
             archive_failed=$((archive_failed + 1))
             echo "zombie-reconciler: rig=$rig FAILED to archive $story_id" >&2

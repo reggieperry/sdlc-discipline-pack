@@ -337,5 +337,186 @@ class NoCityRootTests(unittest.TestCase):
             self.assertIn("GC_CITY_ROOT not set", result.stderr)
 
 
+class PostMergeWritebackTests(unittest.TestCase):
+    """Pack #170 — extend the zombie-reconciler to handle the post-merge
+    writeback failure pattern.
+
+    Pre-#170: the reconciler skipped specs with status in {filed, in-flight,
+    closed} as "terminal-correct." When a chain's finalizer failed to write
+    back merged_pr after a human-merged PR, the spec stayed at status=filed
+    and the bead's final_state stayed at pr_open_for_human — both stale.
+    The cross-batch dep watcher (v2.32.0) reads the bead's final_state to
+    decide whether to clear downstream defers, so a stale final_state means
+    downstream chains stay parked even after the predecessor merges.
+
+    Post-#170: the reconciler processes status=filed specs through the
+    same HIGH-confidence detection paths it uses for status=ready zombies,
+    and on a successful archive, additionally advances the predecessor
+    bead's final_state to "merged" so the cross-batch dep watcher fires
+    on the next tick.
+    """
+
+    def test_filed_spec_with_merged_pr_signal_archives_and_advances_bead(self) -> None:
+        """A status=filed spec whose `feature/<filed_as_bead>` branch matches
+        a merged PR triggers (a) the archive call and (b) a bd update that
+        advances the bead's final_state to "merged".
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            _write_spec(
+                rig_root / "stories",
+                "EL-170",
+                status="filed",
+                filed_as_bead="el-pr508",
+            )
+            beads_json = json.dumps(
+                [
+                    {
+                        "id": "el-pr508",
+                        "status": "closed",
+                        "metadata": {
+                            "story_id": "EL-170",
+                            "final_state": "pr_open_for_human",
+                        },
+                    }
+                ]
+            )
+            prs_json = json.dumps(
+                [
+                    {
+                        "number": 508,
+                        "title": "EL-170: stage 1",
+                        "headRefName": "feature/el-pr508",
+                        "url": "https://github.com/x/y/pull/508",
+                        "mergeCommit": {"oid": "352b563"},
+                        "mergedAt": "2026-05-25T23:52:32Z",
+                    }
+                ]
+            )
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir, pr_list_response=prs_json)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root, enabled=True)
+
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            archive_log = fakes_dir / "stories-archive-argv.log"
+            self.assertTrue(
+                archive_log.exists(),
+                "stories.py archive should have been invoked for the filed-but-merged spec",
+            )
+            archive_text = archive_log.read_text()
+            self.assertIn("archive", archive_text)
+            self.assertIn("EL-170", archive_text)
+            self.assertIn("https://github.com/x/y/pull/508", archive_text)
+            bd_log = fakes_dir / "bd-argv.log"
+            self.assertTrue(bd_log.exists(), "bd should have been invoked")
+            bd_calls = bd_log.read_text()
+            self.assertIn("update el-pr508", bd_calls)
+            self.assertIn("final_state=merged", bd_calls)
+
+    def test_filed_spec_with_no_signal_is_not_archived(self) -> None:
+        """A status=filed spec whose PR has NOT yet merged (no gh signal,
+        no bead-metadata signal) is left alone — same conservative posture
+        the reconciler applies to status=ready zombies with no match.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            _write_spec(
+                rig_root / "stories",
+                "EL-171",
+                status="filed",
+                filed_as_bead="el-inflight",
+            )
+            beads_json = json.dumps(
+                [
+                    {
+                        "id": "el-inflight",
+                        "status": "open",
+                        "metadata": {"story_id": "EL-171"},
+                    }
+                ]
+            )
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir, pr_list_response="[]")
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root, enabled=True)
+
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            archive_log = fakes_dir / "stories-archive-argv.log"
+            self.assertFalse(
+                archive_log.exists(),
+                "stories.py archive should NOT have fired for an in-flight spec",
+            )
+            bd_log = fakes_dir / "bd-argv.log"
+            if bd_log.exists():
+                bd_calls = bd_log.read_text()
+                self.assertNotIn(
+                    "final_state=merged",
+                    bd_calls,
+                    "bd update should NOT have set final_state=merged for an in-flight bead",
+                )
+
+    def test_filed_spec_with_bead_metadata_signal_advances_bead_idempotently(self) -> None:
+        """Signal 1 path: a status=filed spec whose bead is already at
+        final_state=merged (e.g., advanced by a prior reconciler run or
+        manual housekeeping) still archives the spec. The bd update is
+        idempotent on this side — calling it again with the same value
+        is a no-op at the bd layer.
+        """
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            _write_spec(
+                rig_root / "stories",
+                "EL-172",
+                status="filed",
+                filed_as_bead="el-alreadymerged",
+            )
+            beads_json = json.dumps(
+                [
+                    {
+                        "id": "el-alreadymerged",
+                        "status": "closed",
+                        "metadata": {
+                            "story_id": "EL-172",
+                            "final_state": "merged",
+                            "pr_url": "https://github.com/x/y/pull/600",
+                            "final_merged_sha": "abcd1234",
+                        },
+                    }
+                ]
+            )
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir, pr_list_response="[]")
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root, enabled=True)
+
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            archive_log = fakes_dir / "stories-archive-argv.log"
+            self.assertTrue(archive_log.exists(), "archive should fire on Signal 1")
+            archive_text = archive_log.read_text()
+            self.assertIn("EL-172", archive_text)
+            self.assertIn("https://github.com/x/y/pull/600", archive_text)
+            self.assertIn("abcd1234", archive_text)
+            bd_log = fakes_dir / "bd-argv.log"
+            self.assertTrue(bd_log.exists())
+            self.assertIn(
+                "update el-alreadymerged",
+                bd_log.read_text(),
+                "bd update should fire even when the bead's final_state is already merged",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
