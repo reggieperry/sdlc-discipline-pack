@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sdlc-zombie-reconciler.sh — periodic story-spec drift reconciliation
 #
-# Fired on a 24h cooldown via orders/sdlc-zombie-reconciler.toml. For
+# Fired on a 5m cooldown via orders/sdlc-zombie-reconciler.toml. For
 # each registered non-HQ rig, walks stories/EL-*.md against merged PR
 # + bead state; HIGH-confidence zombies (specs whose work shipped on
 # main but whose frontmatter says otherwise) are auto-archived via
@@ -27,10 +27,14 @@
 # Feature gate: SDLC_ZOMBIE_RECONCILER_ENABLED (default "false"). When
 # unset or "false", exits at the top without scanning.
 #
-# Idempotent: a spec whose status is already in {filed, in-flight,
-# closed} is skipped — those are the canonical non-zombie states. A
-# spec already at status: closed (e.g., from a previous reconciler
-# pass that succeeded) is left alone.
+# Idempotent: a spec whose status is in {in-flight, closed} is skipped —
+# those are the canonical non-zombie states. status=filed is processed
+# through the detection ladder (pack #170): if a merged-PR signal hits,
+# the spec is archived and the bead's final_state is advanced via
+# `bd update --set-metadata final_state=merged`; if no signal hits, the
+# spec is left alone (still conservative on weak signal). A spec already
+# at status: closed (e.g., from a previous reconciler pass that
+# succeeded) is left alone.
 
 set -uo pipefail
 
