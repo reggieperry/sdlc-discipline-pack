@@ -161,11 +161,16 @@ class RetryDecisionTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
             update_calls = [c for c in _bd_calls(fakes_dir) if "update el-1" in c]
-            self.assertEqual(len(update_calls), 1, "should re-sling once")
-            call = update_calls[0]
-            self.assertIn("worker.state=resuming", call)
-            self.assertIn("worker.retry_count=1", call)
-            self.assertIn("--status=open", call)
+            # Two updates: the main resling state write + the
+            # sdlc_append_exit_history audit-trail write (pack #182).
+            self.assertEqual(len(update_calls), 2, "expect main update + exit_history append")
+            main = next(c for c in update_calls if "--status=open" in c)
+            self.assertIn("worker.state=resuming", main)
+            self.assertIn("worker.retry_count=1", main)
+            self.assertIn("worker.last_resling_at=", main)
+            history = next(c for c in update_calls if "exit_history" in c)
+            self.assertIn("worker.exit_history=", history)
+            self.assertIn("~watcher_resling~", history)
 
     def test_retry_count_at_cap_triggers_give_up(self) -> None:
         with TemporaryDirectory() as tmp_str:
@@ -180,9 +185,16 @@ class RetryDecisionTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
             update_calls = [c for c in _bd_calls(fakes_dir) if "update el-1" in c]
-            self.assertEqual(len(update_calls), 1, "should give up once")
-            self.assertIn("worker.state=retry_count_exhausted", update_calls[0])
-            self.assertNotIn("resuming", update_calls[0])
+            # Two updates: the main give-up state write + the
+            # sdlc_append_exit_history audit-trail write (pack #182).
+            self.assertEqual(len(update_calls), 2, "expect main update + exit_history append")
+            main = next(c for c in update_calls if "retry_count_exhausted" in c)
+            self.assertIn("worker.gave_up_at=", main)
+            self.assertIn("worker.gave_up_cause=", main)
+            self.assertNotIn("resuming", main)
+            history = next(c for c in update_calls if "exit_history" in c)
+            self.assertIn("worker.exit_history=", history)
+            self.assertIn("~watcher_gave_up~", history)
 
     def test_no_exhausted_at_timestamp_skipped(self) -> None:
         """Beads exhausted before the v2.26.0 wrapper change have no timestamp;
@@ -225,11 +237,16 @@ class MultiBeadTests(unittest.TestCase):
             resling = [c for c in all_updates if "el-resling" in c]
             giveup = [c for c in all_updates if "el-giveup" in c]
             recent = [c for c in all_updates if "el-too-recent" in c]
-            self.assertEqual(len(resling), 1, "el-resling should be re-slung once")
-            self.assertEqual(len(giveup), 1, "el-giveup should give up once")
+            # Two updates per acted-on bead post-pack-#182: main state write
+            # + exit_history audit-trail append.
+            self.assertEqual(len(resling), 2, "el-resling: main + history")
+            self.assertEqual(len(giveup), 2, "el-giveup: main + history")
             self.assertEqual(len(recent), 0, "el-too-recent should be left alone")
-            self.assertIn("worker.retry_count=2", resling[0])
-            self.assertIn("tester.state=retry_count_exhausted", giveup[0])
+            resling_main = next(c for c in resling if "--status=open" in c)
+            giveup_main = next(c for c in giveup if "retry_count_exhausted" in c)
+            self.assertIn("worker.retry_count=2", resling_main)
+            self.assertIn("tester.state=retry_count_exhausted", giveup_main)
+            self.assertIn("tester.gave_up_cause=", giveup_main)
 
 
 if __name__ == "__main__":
