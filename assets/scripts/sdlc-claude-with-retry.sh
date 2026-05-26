@@ -110,32 +110,20 @@ write_metadata() {
     bd update "$STORY_ID" "$@" >/dev/null
 }
 
-# Append a single exit-cause entry to `<template>.exit_history` (pack
-# #105 audit-trail improvement). Reads the prior value, appends
-# `<ISO-ts>~<kind>~<cause>` separated by `|`, writes back. Best-effort —
-# never blocks the retry loop on metadata write failure. The `|` and
-# `~` separators are chosen so they never collide with ISO timestamps
-# or wrapper-side cause strings (e.g. TURN_CAP, API_OVERLOAD).
+# Append-to-exit-history machinery is shared with the watcher
+# (sdlc-exhausted-bead-retry.sh) per pack #182 so both layers write to
+# the same `<template>.exit_history` field. See lib/sdlc-exit-history.sh
+# for the schema and the kinds in use.
 #
 # After the wrapper exits, the operator can read the full history via:
 #   bd show <id> --json | jq -r ".[0].metadata.\"<template>.exit_history\""
 # and parse with:
 #   tr '|' '\n' | awk -F'~' '{print $1, $2, $3}'
+# shellcheck source=lib/sdlc-exit-history.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/sdlc-exit-history.sh"
+
 append_exit_history() {
-    local kind="$1"
-    local cause="$2"
-    local ts new_entry prior new_history
-    ts=$(date -Iseconds)
-    new_entry="${ts}~${kind}~${cause}"
-    prior=$(bd show "$STORY_ID" --json 2>/dev/null \
-        | jq -r ".[0].metadata.\"${SDLC_TEMPLATE}.exit_history\" // \"\"" 2>/dev/null)
-    if [ -z "$prior" ] || [ "$prior" = "null" ]; then
-        new_history="$new_entry"
-    else
-        new_history="${prior}|${new_entry}"
-    fi
-    bd update "$STORY_ID" --set-metadata "${SDLC_TEMPLATE}.exit_history=${new_history}" \
-        >/dev/null 2>&1 || true
+    sdlc_append_exit_history "$STORY_ID" "$SDLC_TEMPLATE" "$1" "$2"
 }
 
 ATTEMPT=1

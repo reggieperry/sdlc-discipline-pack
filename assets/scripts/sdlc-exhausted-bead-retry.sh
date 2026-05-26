@@ -34,6 +34,9 @@
 
 set -uo pipefail
 
+# shellcheck source=lib/sdlc-exit-history.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/sdlc-exit-history.sh"
+
 if [ "${SDLC_EXHAUSTED_BEAD_RETRY_ENABLED:-false}" != "true" ]; then
     exit 0
 fi
@@ -183,20 +186,28 @@ PYEOF
         if [ "$action" = "resling" ]; then
             # Clear state + increment retry count + route back to pool.
             # Clear assignee so supervisor's pool scale-check sees demand.
+            # Append a watcher_resling entry to exit_history so the full
+            # retry lifecycle is reachable from one field per pack #182.
             (cd "$rig_root" && bd update "$bead_id" \
                 --status=open \
                 --assignee "" \
                 --set-metadata "${template}.state=resuming" \
                 --set-metadata "${template}.retry_count=${retry_count}" \
+                --set-metadata "${template}.last_resling_at=$(date -Iseconds)" \
                 ${pool_target:+--set-metadata "gc.routed_to=$pool_target"} \
-                >/dev/null 2>&1) \
+                >/dev/null 2>&1 \
+                && sdlc_append_exit_history "$bead_id" "$template" "watcher_resling" "$cause") \
                 && reslings=$((reslings + 1)) \
                 && echo "exhausted-bead-retry: rig=$rig re-slung $bead_id template=$template count=$retry_count cause=$cause" >&2
         elif [ "$action" = "give_up" ]; then
+            # Record both gave_up_at AND gave_up_cause so the give-up
+            # record itself pins which cause caused the cap (pack #182).
             (cd "$rig_root" && bd update "$bead_id" \
                 --set-metadata "${template}.state=retry_count_exhausted" \
                 --set-metadata "${template}.gave_up_at=$(date -Iseconds)" \
-                >/dev/null 2>&1) \
+                --set-metadata "${template}.gave_up_cause=${cause}" \
+                >/dev/null 2>&1 \
+                && sdlc_append_exit_history "$bead_id" "$template" "watcher_gave_up" "$cause") \
                 && give_ups=$((give_ups + 1)) \
                 && echo "exhausted-bead-retry: rig=$rig giving up on $bead_id template=$template count=$retry_count cause=$cause" >&2
         fi
