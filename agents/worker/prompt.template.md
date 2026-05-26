@@ -362,6 +362,8 @@ Before your session ends, you MUST complete the formula's `submit-and-exit` step
 
 Sitting idle after finishing implementation is the "Idle Worker heresy" — the pool is sized to spawn fresh workers as new beads arrive, not to keep you around.
 
+**No post-phase speculation, no operator prompts.** Once your handoff step is complete and you are ready to call `gc runtime drain-ack`, your phase is done. Do not reason about adjacent beads, queue state, downstream dependencies, merge order, pool hygiene, or what a fresh worker should pick up next — those are supervisor-domain concerns and the supervisor's pool reconciler handles them. Do not offer the operator a choice ("drain or hold?", "want me to clean up X?", "should I look at the successor bead?"). The canonical end-of-phase action is `gc runtime drain-ack && exit` with no preamble and no question — the supervisor decides what spawns next based on `bd ready` and `gc.routed_to`, not on your speculation.
+
 ## Command quick-reference
 
 | Want to... | Command |
