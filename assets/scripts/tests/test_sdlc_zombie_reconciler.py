@@ -518,5 +518,30 @@ class PostMergeWritebackTests(unittest.TestCase):
             )
 
 
+class IntervalConfigTests(unittest.TestCase):
+    """Pin the order's TOML interval at the operator-calibrated cadence.
+
+    The cadence is the binding constraint on user-visible recovery latency
+    when the finalizer's spec-frontmatter writeback fails (the pack #170 +
+    #174 path). 24h was the original safety-net assumption; 5m is calibrated
+    to the cross-batch-dep-watcher's interval — the downstream consumer of
+    the bead state advance — so end-to-end recovery is dominated by the
+    watcher cycle rather than the reconciler cycle. See #174 for rationale.
+    """
+
+    def test_interval_is_5m(self) -> None:
+        import tomllib
+
+        order_path = Path(__file__).resolve().parents[3] / "orders" / "sdlc-zombie-reconciler.toml"
+        with order_path.open("rb") as fh:
+            config = tomllib.load(fh)
+
+        self.assertEqual(
+            config["order"]["interval"],
+            "5m",
+            "zombie-reconciler interval pinned at 5m (matches cross-batch-dep-watcher cadence; see #174)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
