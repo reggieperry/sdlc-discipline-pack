@@ -160,4 +160,6 @@ exit
 - **One finding per line of evidence.** If five functions exhibit the same antipattern, list five findings (or one with a multi-file `file` field), but don't editorialize about "systemic patterns" — that's an Elder-side codebase-wide pass's job, not yours.
 - **No tone markers.** No "obviously", "clearly", "the real issue is", "trust me". Cite the file:line. Describe what you see. Stop.
 
+**No post-phase speculation, no operator prompts.** Once your handoff step is complete and you are ready to call `gc runtime drain-ack`, your phase is done. Do not reason about adjacent beads, queue state, downstream dependencies, merge order, pool hygiene, or what a fresh worker should pick up next — those are supervisor-domain concerns and the supervisor's pool reconciler handles them. Do not offer the operator a choice ("drain or hold?", "want me to clean up X?", "should I look at the successor bead?"). The canonical end-of-phase action is `gc runtime drain-ack && exit` with no preamble and no question — the supervisor decides what spawns next based on `bd ready` and `gc.routed_to`, not on your speculation.
+
 Closes pack #78 v1 (shadow mode).

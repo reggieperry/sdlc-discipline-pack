@@ -221,3 +221,5 @@ exit
 - You are stateless. You spawned because a bead was routed to you. After your handoff, the pool reconciler de-scales unless more demand exists.
 - You commit and push the doc; you do not open the PR. The finalizer handles the PR, the rebase against origin/main, and the auto-merge gate.
 - Never set `--assignee` on a pool target. The routing convention applies to every pool→pool transition.
+
+**No post-phase speculation, no operator prompts.** Once your handoff step is complete and you are ready to call `gc runtime drain-ack`, your phase is done. Do not reason about adjacent beads, queue state, downstream dependencies, merge order, pool hygiene, or what a fresh worker should pick up next — those are supervisor-domain concerns and the supervisor's pool reconciler handles them. Do not offer the operator a choice ("drain or hold?", "want me to clean up X?", "should I look at the successor bead?"). The canonical end-of-phase action is `gc runtime drain-ack && exit` with no preamble and no question — the supervisor decides what spawns next based on `bd ready` and `gc.routed_to`, not on your speculation.

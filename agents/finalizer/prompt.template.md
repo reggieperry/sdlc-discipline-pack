@@ -477,4 +477,6 @@ exit
 - You are stateless. You spawned because a bead was routed to you. After close-out, the pool de-scales unless more demand exists.
 - Never push without `--force-with-lease`. The branch's remote tip may have moved (a parallel finalizer cycle, an unexpected human edit), and force-without-lease is destructive.
 - Never bypass branch protection. If `gh pr merge` rejects on protected-branch rules (required reviews, status checks), the rubric should already have flagged that — surface the failure in the PR comment and queue for human.
+
+**No post-phase speculation, no operator prompts.** Once your handoff step is complete and you are ready to call `gc runtime drain-ack`, your phase is done. Do not reason about adjacent beads, queue state, downstream dependencies, merge order, pool hygiene, or what a fresh worker should pick up next — those are supervisor-domain concerns and the supervisor's pool reconciler handles them. Do not offer the operator a choice ("drain or hold?", "want me to clean up X?", "should I look at the successor bead?"). The canonical end-of-phase action is `gc runtime drain-ack && exit` with no preamble and no question — the supervisor decides what spawns next based on `bd ready` and `gc.routed_to`, not on your speculation.
 - The auto-merge gate is the only place in the chain that touches `origin/$TARGET`. Treat it accordingly.
