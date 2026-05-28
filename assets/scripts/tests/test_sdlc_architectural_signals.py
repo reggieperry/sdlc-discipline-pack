@@ -123,6 +123,230 @@ class SignalA(unittest.TestCase):
         self.assertNotIn("A", result["signals"])
 
 
+# ---------- Signal A consequence-split (issue #191) ---------------------------
+#
+# A sensitive-file touch (Signal A) used to force human_required unconditionally.
+# The split makes the consequence depend on substance, but ONLY when the rig opts
+# in by populating constant_files / algorithm_files. With neither set (default),
+# Signal A keeps its unconditional human_required consequence — fully
+# backward-compatible. When opted in: a constant-RHS modification (constant_files)
+# or an algorithm-body edit (algorithm_files) forces human_required; a purely
+# structural-additive sensitive touch falls through to the size/G logic.
+
+_CONST_BASELINE = textwrap.dedent(
+    """\
+    from typing import Final
+
+    MAX_RISK_PER_TRADE: Final[float] = 0.02
+    SIX_PERCENT_RULE: Final[float] = 0.06
+    """
+)
+_CONST_RHS_CHANGED = textwrap.dedent(
+    """\
+    from typing import Final
+
+    MAX_RISK_PER_TRADE: Final[float] = 0.03
+    SIX_PERCENT_RULE: Final[float] = 0.06
+    """
+)
+_CONST_ADDITIVE = textwrap.dedent(
+    """\
+    from typing import Final
+
+    MAX_RISK_PER_TRADE: Final[float] = 0.02
+    SIX_PERCENT_RULE: Final[float] = 0.06
+    NEW_THRESHOLD: Final[float] = 0.01
+    """
+)
+
+_ALGO_BASELINE = textwrap.dedent(
+    """\
+    def macd_histogram(values):
+        fast = ema(values, 12)
+        slow = ema(values, 26)
+        return fast - slow
+    """
+)
+_ALGO_BODY_CHANGED = textwrap.dedent(
+    """\
+    def macd_histogram(values):
+        fast = ema(values, 12)
+        slow = ema(values, 30)
+        return fast - slow
+    """
+)
+_ALGO_ADDITIVE = textwrap.dedent(
+    """\
+    def macd_histogram(values):
+        fast = ema(values, 12)
+        slow = ema(values, 26)
+        return fast - slow
+
+
+    def safezone_stop(values):
+        return min(values)
+    """
+)
+
+
+class SignalAConsequenceSplit(unittest.TestCase):
+    def test_default_no_optin_keeps_unconditional_human_required(self) -> None:
+        """Backward-compat: with constant_files / algorithm_files unset, even a
+        purely-additive sensitive touch forces human_required, exactly as before
+        the split. This is the empty-default contract that lets the pack PR land
+        before the Elder-rig opt-in without a behavior change."""
+        repo = make_repo()
+        baseline = commit(repo, {"core/state.py": "X = 1\n"}, "baseline")
+        head = commit(repo, {"core/state.py": "X = 1\nY = 2\n"}, "additive")
+        cfg = write_rig_config(repo, sensitive_files=["core/state.py"])
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(result["recommendation"], "human_required")
+
+    def test_optin_constant_rhs_modification_forces_human_required(self) -> None:
+        repo = make_repo()
+        baseline = commit(repo, {"risk_parameters.py": _CONST_BASELINE}, "baseline")
+        head = commit(repo, {"risk_parameters.py": _CONST_RHS_CHANGED}, "raise 2% to 3%")
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["risk_parameters.py"],
+            constant_files=["risk_parameters.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(result["recommendation"], "human_required")
+
+    def test_optin_algorithm_body_edit_forces_human_required(self) -> None:
+        repo = make_repo()
+        baseline = commit(repo, {"indicators/math.py": _ALGO_BASELINE}, "baseline")
+        head = commit(repo, {"indicators/math.py": _ALGO_BODY_CHANGED}, "26 -> 30 period")
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["indicators/*.py"],
+            algorithm_files=["indicators/*.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(result["recommendation"], "human_required")
+
+    def test_optin_structural_additive_touch_downgrades(self) -> None:
+        """The motivating case: a sensitive file that is neither a constant nor
+        an algorithm file (structural — e.g. core/state.py), touched additively
+        and small, downgrades once the rig opts in. Opt-in is active because
+        algorithm_files is populated for a *different* file."""
+        repo = make_repo()
+        baseline = commit(repo, {"core/state.py": "X = 1\n"}, "baseline")
+        head = commit(repo, {"core/state.py": "X = 1\nY = 2\n"}, "additive field")
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["core/state.py"],
+            algorithm_files=["indicators/*.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(result["recommendation"], "glance_merge")
+
+    def test_optin_additive_new_constant_is_not_an_rhs_modification(self) -> None:
+        """Precision of the constant-RHS helper: adding a NEW constant (pure `+`,
+        no removed Final line) is structural-additive, not an RHS modification,
+        so it does not force human_required on the constant axis. Distinct from
+        test_optin_constant_rhs_modification, which modifies an existing value."""
+        repo = make_repo()
+        baseline = commit(repo, {"risk_parameters.py": _CONST_BASELINE}, "baseline")
+        head = commit(repo, {"risk_parameters.py": _CONST_ADDITIVE}, "add new threshold")
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["risk_parameters.py"],
+            constant_files=["risk_parameters.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(result["recommendation"], "glance_merge")
+
+    def test_optin_additive_new_function_in_algorithm_file_downgrades(self) -> None:
+        """Appending a new function to an algorithm file (pure `+`, no body edit)
+        is structural-additive and downgrades. The body-edit check keys on a
+        deletion, which a pure append does not produce."""
+        repo = make_repo()
+        baseline = commit(repo, {"indicators/math.py": _ALGO_BASELINE}, "baseline")
+        head = commit(repo, {"indicators/math.py": _ALGO_ADDITIVE}, "add safezone_stop")
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["indicators/*.py"],
+            algorithm_files=["indicators/*.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertEqual(result["recommendation"], "glance_merge")
+
+    def test_el168_body_edit_plus_assertion_regression_stays_human_required(self) -> None:
+        """EL-168-shaped regression: a substantive algorithm change (body edit in
+        an algorithm_files path) alongside a dropped test assertion must stay
+        human_required after the split — via two independent paths (Signal A
+        substantive on the algorithm-body axis, and Signal F assertion
+        regression in the test file). The split must never weaken the safe
+        direction. Signal F is test-file-scoped, so the assertion drop lives in
+        the test file, not the algorithm file."""
+        repo = make_repo()
+        baseline = commit(
+            repo,
+            {
+                "indicators/math.py": _ALGO_BASELINE,
+                "tests/test_math.py": "def test_macd():\n    assert macd_histogram([1, 2, 3])\n",
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "indicators/math.py": _ALGO_BODY_CHANGED,
+                "tests/test_math.py": "def test_macd():\n    macd_histogram([1, 2, 3])\n",
+            },
+            "change period + drop test assert",
+        )
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["indicators/*.py"],
+            algorithm_files=["indicators/*.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertIn("F", result["signals"])
+        self.assertEqual(result["recommendation"], "human_required")
+
+    def test_optin_additive_a_does_not_suppress_other_signals(self) -> None:
+        """The additive-A fall-through must not mask a co-firing architectural
+        signal. A purely-additive sensitive touch (A) alongside an assertion
+        regression (F) elsewhere still routes human_required — only A is
+        permitted to fall through, not the whole diff."""
+        repo = make_repo()
+        baseline = commit(
+            repo,
+            {
+                "core/state.py": "X = 1\n",
+                "tests/test_thing.py": "def test_a():\n    assert True\n",
+            },
+            "baseline",
+        )
+        head = commit(
+            repo,
+            {
+                "core/state.py": "X = 1\nY = 2\n",
+                "tests/test_thing.py": "def test_a():\n    pass\n",
+            },
+            "additive state + drop assert",
+        )
+        cfg = write_rig_config(
+            repo,
+            sensitive_files=["core/state.py"],
+            algorithm_files=["indicators/*.py"],
+        )
+        result = run_script(repo, baseline, head, cfg)
+        self.assertIn("A", result["signals"])
+        self.assertIn("F", result["signals"])
+        self.assertEqual(result["recommendation"], "human_required")
+
+
 # ---------- Signal B — Protocol signature delta -------------------------------
 
 
