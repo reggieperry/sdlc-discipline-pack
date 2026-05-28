@@ -559,9 +559,11 @@ def signal_g_mechanical_sweep(ctx: SignalContext) -> list[SignalDetail]:
     than accidental.
 
     When this signal fires, ``derive_recommendation`` routes to
-    ``review_encouraged`` rather than ``human_required`` — sensitive-file
-    touch (Signal A) still wins back to ``human_required`` if it also
-    fires.
+    ``glance_merge`` (post-issue-#191, which removed the review_encouraged
+    tier this used to route to) — sensitive-file touch (Signal A) still
+    wins back to ``human_required`` if it also fires. The stories.py
+    validate gate (pack #75) catches the one failure mode that mattered
+    for auto-merging a sweep (a YAML-status typo).
     """
 
     if len(ctx.files) < 2:
@@ -616,8 +618,8 @@ def signal_g_mechanical_sweep(ctx: SignalContext) -> list[SignalDetail]:
                 "yaml_key": yaml_key or "",
                 "rationale": (
                     "all hunks are uniform 1+/1- edits on the same YAML key "
-                    "across spec files; routed to review_encouraged "
-                    "(24h delayed-merge buffer) rather than human_required"
+                    "across spec files; routed to glance_merge rather than "
+                    "human_required (issue #191 two-tier model)"
                 ),
             },
         )
@@ -660,19 +662,25 @@ def derive_recommendation(
     lines_added: int,
     edits_bodies: bool,
 ) -> str:
+    # Two-tier model (issue #191): glance_merge | human_required. The middle
+    # review_encouraged tier was removed — it was the residual fallthrough
+    # bucket, never gated a fix or a rejection across the rig's history, and
+    # the 24h delayed-merge buffer it was meant to drive never fired. The
+    # reviewer phase still runs on every PR and produces the same findings;
+    # only the parking label is gone.
     if not rig.present:
         return "human_required"
-    # Sensitive-file touch (Signal A) always wins to human_required, even if
-    # the diff is otherwise a mechanical sweep.
+    # Sensitive-file touch (Signal A) wins to human_required, even if the diff
+    # is otherwise a mechanical sweep.
     if "A" in signals:
         return "human_required"
     # Mechanical sweep (Signal G) — uniform 1+/1- same-YAML-key edits across
-    # spec files — routes to review_encouraged (24h delayed-merge buffer)
-    # rather than human_required. The intent is to make the right routing
-    # reason-explicit so future tier-criteria edits don't reclassify uniform
-    # sweeps upward toward human_required. See signal_g_mechanical_sweep.
+    # spec files — is the lowest-risk diff shape the gate recognizes. Post-
+    # collapse it routes to glance_merge; the stories.py validate gate
+    # (pack #75) catches the one failure mode that mattered (a YAML-status
+    # typo). See signal_g_mechanical_sweep.
     if "G" in signals:
-        return "review_encouraged"
+        return "glance_merge"
     if signals:
         return "human_required"
     if (
@@ -681,7 +689,10 @@ def derive_recommendation(
         and not edits_bodies
     ):
         return "glance_merge"
-    return "review_encouraged"
+    # Residual fallthrough — no signal, but large or body-editing. Used to be
+    # review_encouraged; now human_required. The operator merged these by hand
+    # all along; the tier just named the park honestly.
+    return "human_required"
 
 
 # ---------- main -------------------------------------------------------------

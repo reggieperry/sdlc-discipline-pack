@@ -13,8 +13,9 @@
 #   --pr-url <url>           PR URL; the trailing path component is the
 #                            PR number, included in the subject
 #   --recommendation <tier>  reviewer recommendation tier
-#                            (glance_merge / review_encouraged /
-#                            human_required), included in the body
+#                            (glance_merge / human_required; the middle
+#                            review_encouraged tier was removed in issue
+#                            #191), included in the body
 #   --signals <csv>          architectural signals fired, included in
 #                            the body; empty becomes "none"
 #   --type <kind>            notification kind; one of:

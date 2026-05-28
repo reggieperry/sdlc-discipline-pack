@@ -9,8 +9,8 @@
 # would filter out successor beads with unmerged predecessors. But `bd ready`
 # unblocks on predecessor `status=closed`, and the chain's finalizer closes
 # the predecessor's bead at chain-end with `final_state=pr_open_for_human` —
-# hours before the human merges the PR in the review_encouraged or
-# human_required tier. Without this watcher, the successor's worker spawns
+# hours before the human merges the PR in the human_required tier. Without
+# this watcher, the successor's worker spawns
 # against `origin/main` before the predecessor's code lands.
 #
 # Defense (pack #154): stories.py defers each successor bead with

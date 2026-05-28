@@ -468,7 +468,11 @@ class SignalG(unittest.TestCase):
         cfg = write_rig_config(repo)
         result = run_script(repo, baseline, head, cfg)
         self.assertIn("G", result["signals"])
-        self.assertEqual(result["recommendation"], "review_encouraged")
+        # Post-tier-collapse (issue #191): a recognized mechanical sweep is the
+        # lowest-risk diff shape the gate knows; with review_encouraged removed
+        # it routes to glance_merge. The stories.py validate gate (pack #75)
+        # catches the one failure mode that mattered (a YAML-status typo).
+        self.assertEqual(result["recommendation"], "glance_merge")
 
     def test_sensitive_file_override_wins_back_to_human_required(self) -> None:
         """Signal A trumps Signal G — sensitive-file touch is always human_required."""
@@ -616,15 +620,56 @@ class Recommendation(unittest.TestCase):
         self.assertEqual(result["signals"], [])
         self.assertEqual(result["recommendation"], "glance_merge")
 
-    def test_review_encouraged_when_body_edits(self) -> None:
+    def test_human_required_when_body_edits(self) -> None:
         repo = make_repo()
         baseline = commit(repo, {"a.py": "x = 1\n"}, "baseline")
         head = commit(repo, {"a.py": "x = 2\n"}, "edit existing line")
         cfg = write_rig_config(repo)
         result = run_script(repo, baseline, head, cfg)
         # No signals, but a line was deleted -> edits_existing_function_bodies=True.
+        # Post-tier-collapse (issue #191): the body-editing fallthrough that used
+        # to route review_encouraged now routes human_required — the operator
+        # has been manually merging these all along; the tier just named the
+        # park honestly.
         self.assertEqual(result["signals"], [])
-        self.assertEqual(result["recommendation"], "review_encouraged")
+        self.assertEqual(result["recommendation"], "human_required")
+
+    def test_review_encouraged_tier_is_never_emitted(self) -> None:
+        """Issue #191: the three-tier model collapsed to two. Drive the two
+        branches of derive_recommendation that used to ``return
+        "review_encouraged"`` — the Signal-G mechanical sweep and the
+        body-edit fallthrough — and assert neither emits the removed tier.
+        This is the regression guard: re-adding review_encouraged to either
+        branch fails here."""
+        # Branch 1 — Signal-G mechanical sweep (was the `if "G"` return).
+        sweep_repo = make_repo()
+        sweep_base = commit(
+            sweep_repo,
+            {
+                "stories/EL-200-a.md": _spec_with_status("ready"),
+                "stories/EL-201-b.md": _spec_with_status("ready"),
+            },
+            "baseline",
+        )
+        sweep_head = commit(
+            sweep_repo,
+            {
+                "stories/EL-200-a.md": _spec_with_status("shipped"),
+                "stories/EL-201-b.md": _spec_with_status("shipped"),
+            },
+            "sweep status ready -> shipped",
+        )
+        sweep_result = run_script(sweep_repo, sweep_base, sweep_head, write_rig_config(sweep_repo))
+        self.assertIn("G", sweep_result["signals"])
+        self.assertNotEqual(sweep_result["recommendation"], "review_encouraged")
+
+        # Branch 2 — body-edit fallthrough (was the final return).
+        body_repo = make_repo()
+        body_base = commit(body_repo, {"a.py": "x = 1\n"}, "baseline")
+        body_head = commit(body_repo, {"a.py": "x = 2\n"}, "edit existing line")
+        body_result = run_script(body_repo, body_base, body_head, write_rig_config(body_repo))
+        self.assertEqual(body_result["signals"], [])
+        self.assertNotEqual(body_result["recommendation"], "review_encouraged")
 
 
 # ---------- Output schema sanity --------------------------------------------

@@ -400,10 +400,9 @@ SDLC_GLANCE_MERGE_DEFAULT = "false"
 
 ### Mode C — Solo, PR + recommendation-driven merge
 
-Branch is pushed, PR is opened, the glance rubric runs, and the finalizer routes the PR by the reviewer's recommendation (v2.10.0):
+Branch is pushed, PR is opened, the glance rubric runs, and the finalizer routes the PR by the reviewer's recommendation. Two tiers since issue #191 (the middle `review_encouraged` tier was removed):
 
 - `glance_merge` recommendation + rubric pass → merge immediately
-- `review_encouraged` + rubric pass → park; the delayed-merge order auto-merges after the configured window (default 24h) unless an objection comment is posted
 - `human_required` (any signal fired, or rig has no `architecture.toml`) → park indefinitely
 - rubric fail (any recommendation) → park
 
@@ -415,7 +414,7 @@ SDLC_OPEN_PR_DEFAULT = "true"
 SDLC_GLANCE_MERGE_DEFAULT = "true"
 ```
 
-The env vars are read by the finalizer pool, which owns the merge gate. Until v1.x, the documenter held this responsibility — that boundary moved in v2.0. The three-tier recommendation logic was added in v2.10.0; pre-v2.10.0 rigs (no `architecture.toml`, no `review_recommendation` metadata) default to `human_required` and park.
+The env vars are read by the finalizer pool, which owns the merge gate. Until v1.x, the documenter held this responsibility — that boundary moved in v2.0. The recommendation logic was added in v2.10.0 (as three tiers; collapsed to two in issue #191); rigs with no `architecture.toml` and no `review_recommendation` metadata default to `human_required` and park.
 
 ## Per-story overrides
 
@@ -458,16 +457,18 @@ protocol_modules    = ["core/agent.py"]
 
 Without the file, the signals script defaults every PR to `human_required` — a rig that hasn't declared its shape can't be auto-merged safely. The full format spec lives in `overlay/per-provider/claude/.claude/rules/architecture-config.md` (auto-loads when the rig edits its `architecture.toml`).
 
-### Delayed-merge tier
+### Delayed-merge tier (dormant since issue #191)
 
-The middle recommendation, `review_encouraged`, parks the PR with `final_state=pr_open_for_human` (same terminal state as `human_required`). A periodic order — `orders/sdlc-delayed-merge.toml`, default cooldown 30m — scans those beads and merges each PR after a delay window or in response to a PR-comment override.
+The middle `review_encouraged` recommendation was removed in issue #191 — across the originating rig's full history it never gated a fix or a rejection (it was the residual fallthrough bucket, only ever emitted on a PASS verdict), and the delayed-merge buffer it drove never fired (no `merged_delayed` bead ever recorded). The two-tier model is `glance_merge` | `human_required`.
 
-Tunables:
+The `orders/sdlc-delayed-merge.toml` order and its `sdlc-delayed-merge.sh` script are kept in the tree but **dormant**: the scanner early-exits unless `SDLC_DELAYED_MERGE_ENABLED=true` (default flipped to `false` in #191), and the reviewer no longer emits `review_encouraged` so the scan would match zero beads regardless. A rig that wants a middle delayed-merge tier can revive the machinery by re-introducing the tier in its reviewer override and setting `SDLC_DELAYED_MERGE_ENABLED=true`; the tunables below still apply when revived.
+
+Tunables (apply only when the order is revived):
 
 | Env var | Default | What it does |
 |---|---|---|
-| `SDLC_DELAYED_MERGE_ENABLED` | `true` | Master switch. Set `false` to disable the order without removing it. |
-| `SDLC_REVIEW_ENCOURAGED_DELAY_HOURS` | `24` | Delay before auto-merging a `review_encouraged` PR with no override comment. |
+| `SDLC_DELAYED_MERGE_ENABLED` | `false` | Master switch. Dormant by default since #191; set `true` to revive. |
+| `SDLC_REVIEW_ENCOURAGED_DELAY_HOURS` | `24` | Delay before auto-merging a revived-tier PR with no override comment. |
 | `SDLC_DELAYED_MERGE_APPROVE_PATTERN` | `LGTM-AUTO\|MERGE-NOW` | First-token regex for "merge now, bypass the delay." |
 | `SDLC_DELAYED_MERGE_OBJECTION_PATTERN` | `NACK\|HOLD\|VETO` | First-token regex for "hold; don't auto-merge." |
 
@@ -512,7 +513,7 @@ Subject formats:
 - `[<rig>] PR <#> open for review: <story-title>` — flavor 1 (PR parked, `final_state=pr_open_for_human`)
 - `[<rig>] PR <#> auto-merged: <story-title>` — flavor 2 (auto-merged, `final_state=merged`)
 
-Body: PR URL, reviewer recommendation tier (`glance_merge` / `review_encouraged` / `human_required`), architectural signals fired, story ID, story title.
+Body: PR URL, reviewer recommendation tier (`glance_merge` / `human_required`), architectural signals fired, story ID, story title.
 
 Other notification paths (stall detection, order-fire stall detection) ship in follow-up sub-stories of pack #44.
 

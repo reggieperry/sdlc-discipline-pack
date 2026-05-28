@@ -65,7 +65,7 @@ The `**In:**` and `**Out:**` sections are how the spec talks to the chain about 
 
 The trap to avoid is writing `**Out:**` sections so restrictive that they prevent natural cleanup. A worker who notices a typo in a docstring they are otherwise modifying should fix the typo; a worker who notices an unused import in a file they are restructuring should remove it. The `**Out:**` list should fence off work that is clearly someone else's domain, not work that lives inside the file the worker is already editing.
 
-A good test of an `**Out:**` section: read each bullet and ask "would the chain bounce on this if the worker accidentally did it?" Items where the answer is "yes — this would route review_encouraged or worse" belong in the list. Items where the answer is "no — this would be fine but unscheduled" can usually be left out; the reviewer's scope check catches them anyway. The list earns its place when it prevents specific failure modes, not when it enumerates everything the story does not do. The pattern that ships best: short `**In:**` (two to five items), short `**Out:**` (three to six items), each item one line.
+A good test of an `**Out:**` section: read each bullet and ask "would the chain bounce on this if the worker accidentally did it?" Items where the answer is "yes — this would route human_required or fail review" belong in the list. Items where the answer is "no — this would be fine but unscheduled" can usually be left out; the reviewer's scope check catches them anyway. The list earns its place when it prevents specific failure modes, not when it enumerates everything the story does not do. The pattern that ships best: short `**In:**` (two to five items), short `**Out:**` (three to six items), each item one line.
 
 ## The audit pattern
 
