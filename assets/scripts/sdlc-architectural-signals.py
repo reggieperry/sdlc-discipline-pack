@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """sdlc-architectural-signals.py — detect architectural signals in a diff.
 
-Six signals (A-F); any one fires → ``recommendation = "human_required"``.
+Seven signals (A-G). Most route ``recommendation = "human_required"``; the
+mechanical sweep (G) routes ``glance_merge``, and Signal A's consequence depends
+on substance once the rig opts in (see ``derive_recommendation``).
 
 ::
 
@@ -11,6 +13,7 @@ Six signals (A-F); any one fires → ``recommendation = "human_required"``.
     Signal D   architectural layer crossing    (lint-imports contract violation)
     Signal E   public-name removal w/o rename  (name in __all__ removed, no equivalent added)
     Signal F   assertion-count regression      (test assertions decreased baseline → head)
+    Signal G   mechanical sweep                (uniform 1+/1- YAML-key edits across specs)
 
 None of the detections require LLM judgment: AST diff, regex, and linter output only.
 The LLM's job (in the reviewer prompt — story 3) is to SURFACE the signals to a human,
@@ -68,6 +71,7 @@ import argparse
 import ast
 import fnmatch
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -92,6 +96,14 @@ class RigConfig:
     sensitive_files: tuple[str, ...] = ()
     domain_model_files: tuple[str, ...] = ()
     protocol_modules: tuple[str, ...] = ()
+    # Issue #191 — Signal A consequence-split. A rig opts into substance-based
+    # tiering by classifying (a subset of) its sensitive files. constant_files
+    # hold tuned constants (a constant-RHS modification forces human_required);
+    # algorithm_files hold domain math (an existing-body edit forces
+    # human_required). Both default empty, in which case Signal A keeps its
+    # unconditional human_required consequence — fully backward-compatible.
+    constant_files: tuple[str, ...] = ()
+    algorithm_files: tuple[str, ...] = ()
 
 
 @dataclass
@@ -139,6 +151,8 @@ def load_rig_config(path: Path) -> RigConfig:
         sensitive_files=tuple(data.get("sensitive_files", ())),
         domain_model_files=tuple(data.get("domain_model_files", ())),
         protocol_modules=tuple(data.get("protocol_modules", ())),
+        constant_files=tuple(data.get("constant_files", ())),
+        algorithm_files=tuple(data.get("algorithm_files", ())),
     )
 
 
@@ -211,6 +225,91 @@ def edits_existing_function_bodies(baseline: str, head: str) -> bool:
             continue
         if line.startswith("-") and not line.startswith("---"):
             return True
+    return False
+
+
+# ---------- Signal A consequence-split: substance detection ------------------
+#
+# Issue #191. A sensitive-file touch forces human_required only when it is
+# *substantive* — a constant-RHS modification in a declared constant_files path,
+# or an algorithm-body edit in a declared algorithm_files path. A purely
+# structural-additive sensitive touch falls through to the size/G logic. The
+# detection is conservative: when the per-file diff can't be retrieved, the
+# helpers return True (the human_required-forcing answer).
+
+# An UPPER_SNAKE_CASE assignment, optionally type-annotated (e.g. ``MAX_RISK:
+# Final[float] = 0.02`` or ``SIX_PERCENT = 0.06``). The ``(:[^=]*)?`` swallows a
+# ``: Final[...]`` annotation without consuming the assignment ``=``. Biased to
+# over-match — over-matching errs toward human_required, the safe direction.
+_CONSTANT_ASSIGN_RE = re.compile(r"^\s*[A-Z_][A-Z0-9_]*\s*(:[^=]*)?=")
+
+
+def _file_diff(baseline: str, head: str, path: str) -> str | None:
+    """Per-file unified diff (context-free). None if git fails."""
+
+    try:
+        return _git("diff", "--unified=0", f"{baseline}..{head}", "--", path)
+    except RuntimeError:
+        return None
+
+
+def constant_rhs_modified(baseline: str, head: str, path: str) -> bool:
+    """True if the per-file diff modifies an existing constant assignment.
+
+    Detection keys on a *removed* (``-``) line matching the constant-assignment
+    pattern: an RHS change emits the old value as a deletion under
+    ``--unified=0``, whereas a purely-additive new constant emits only ``+``
+    lines. Conservative — returns True when the diff can't be retrieved.
+    """
+
+    raw = _file_diff(baseline, head, path)
+    if raw is None:
+        return True
+    for line in raw.splitlines():
+        if line.startswith("---"):
+            continue
+        if line.startswith("-") and _CONSTANT_ASSIGN_RE.match(line[1:]):
+            return True
+    return False
+
+
+def algorithm_body_edited(baseline: str, head: str, path: str) -> bool:
+    """True if the per-file diff deletes or modifies an existing line.
+
+    Same conservative body-edit heuristic as
+    :func:`edits_existing_function_bodies`, scoped to one file. A pure append
+    (only ``+`` lines) does not trigger. Returns True when the diff can't be
+    retrieved.
+    """
+
+    raw = _file_diff(baseline, head, path)
+    if raw is None:
+        return True
+    for line in raw.splitlines():
+        if line.startswith("---"):
+            continue
+        if line.startswith("-"):
+            return True
+    return False
+
+
+def sensitive_touch_is_substantive(ctx: SignalContext, baseline: str, head: str) -> bool:
+    """True if any sensitive-file touch is substantive under the opt-in keys.
+
+    A constant-RHS modification in a ``constant_files`` path, or an
+    algorithm-body edit in an ``algorithm_files`` path. Only consulted when the
+    rig has opted into substance-based tiering (issue #191); a sensitive file in
+    neither list never contributes — it is treated as structural-additive.
+    """
+
+    rig = ctx.rig
+    for _status, path in ctx.files:
+        if any(fnmatch.fnmatch(path, pat) for pat in rig.constant_files):
+            if constant_rhs_modified(baseline, head, path):
+                return True
+        if any(fnmatch.fnmatch(path, pat) for pat in rig.algorithm_files):
+            if algorithm_body_edited(baseline, head, path):
+                return True
     return False
 
 
@@ -661,6 +760,9 @@ def derive_recommendation(
     files_changed: int,
     lines_added: int,
     edits_bodies: bool,
+    *,
+    sensitive_opted_in: bool = False,
+    sensitive_substantive: bool = False,
 ) -> str:
     # Two-tier model (issue #191): glance_merge | human_required. The middle
     # review_encouraged tier was removed — it was the residual fallthrough
@@ -670,9 +772,14 @@ def derive_recommendation(
     # only the parking label is gone.
     if not rig.present:
         return "human_required"
-    # Sensitive-file touch (Signal A) wins to human_required, even if the diff
-    # is otherwise a mechanical sweep.
-    if "A" in signals:
+    # Signal A consequence-split (issue #191). When the rig has NOT opted into
+    # substance-based tiering (constant_files / algorithm_files both empty), a
+    # sensitive-file touch forces human_required unconditionally — backward-
+    # compatible with the file-level flag. When opted in, only a *substantive*
+    # touch (a constant-RHS modification or an algorithm-body edit) forces
+    # human_required; a purely structural-additive sensitive touch falls through
+    # to the size/G logic below.
+    if "A" in signals and (not sensitive_opted_in or sensitive_substantive):
         return "human_required"
     # Mechanical sweep (Signal G) — uniform 1+/1- same-YAML-key edits across
     # spec files — is the lowest-risk diff shape the gate recognizes. Post-
@@ -681,7 +788,11 @@ def derive_recommendation(
     # typo). See signal_g_mechanical_sweep.
     if "G" in signals:
         return "glance_merge"
-    if signals:
+    # Any other architectural signal forces human_required. A and G are excluded:
+    # A here can only be the opted-in structural-additive case (it would have
+    # returned above otherwise), which is permitted to fall through; G returned
+    # above. Every other signal (B–F) still gates.
+    if [s for s in signals if s not in ("A", "G")]:
         return "human_required"
     if (
         files_changed <= GLANCE_MAX_FILES
@@ -731,7 +842,23 @@ def run(baseline: str, head: str, rig_config_path: Path) -> dict[str, object]:
     if not rig.present:
         fired = ["MISSING_CONFIG"]
 
-    recommendation = derive_recommendation(fired, rig, len(files), lines_added, edits_bodies)
+    # Signal A consequence-split (issue #191). opted_in is true only when the rig
+    # classifies some sensitive files as constants or algorithms; otherwise the
+    # split is inert and Signal A keeps its unconditional human_required path.
+    sensitive_opted_in = bool(rig.constant_files or rig.algorithm_files)
+    sensitive_substantive = sensitive_opted_in and sensitive_touch_is_substantive(
+        ctx, baseline, head
+    )
+
+    recommendation = derive_recommendation(
+        fired,
+        rig,
+        len(files),
+        lines_added,
+        edits_bodies,
+        sensitive_opted_in=sensitive_opted_in,
+        sensitive_substantive=sensitive_substantive,
+    )
 
     return {
         "version": SCHEMA_VERSION,
@@ -743,6 +870,8 @@ def run(baseline: str, head: str, rig_config_path: Path) -> dict[str, object]:
             "sensitive_files_count": len(rig.sensitive_files),
             "domain_model_files_count": len(rig.domain_model_files),
             "protocol_modules_count": len(rig.protocol_modules),
+            "constant_files_count": len(rig.constant_files),
+            "algorithm_files_count": len(rig.algorithm_files),
         },
         "signals": fired,
         "details": [d.to_json() for d in details],

@@ -11,19 +11,23 @@ Rigs author this file once and commit it. The pack ships no default; the shape i
 
 ## File format
 
-TOML. Stdlib-only parse (`tomllib`); no PyYAML dependency. Three top-level keys, each a list of strings:
+TOML. Stdlib-only parse (`tomllib`); no PyYAML dependency. The list-valued keys, each a list of strings:
 
 ```toml
 sensitive_files     = ["risk_parameters.py", "agents/risk_agent.py", "indicators/*.py"]
 domain_model_files  = ["core/state.py", "core/domain.py"]
 protocol_modules    = ["core/agent.py"]
+
+# Optional (issue #191) — opt into substance-based tiering for Signal A.
+constant_files      = ["risk_parameters.py"]
+algorithm_files     = ["indicators/*.py"]
 ```
 
 A missing key defaults to an empty list — the corresponding signal cannot fire on that axis. A missing *file* (no `architecture.toml` at the declared path) defaults to permanent `human_required` for every PR.
 
 ## Field semantics
 
-**`sensitive_files`** — paths whose edits should always route to human review. Touched by Signal A (sensitive file delta). Entries are repo-relative; shell globs work via `fnmatch` (`*`, `?`, `[abc]`).
+**`sensitive_files`** — paths whose edits route to human review by default. Touched by Signal A (sensitive file delta). Entries are repo-relative; shell globs work via `fnmatch` (`*`, `?`, `[abc]`). A rig can refine the consequence per substance via `constant_files` / `algorithm_files` (below); without those, any sensitive touch forces `human_required`.
 
 Cross-check the list against `.claude/rules/project/sensitive-files.md` if the rig has one. The two lists serve different consumers (signals script vs. glance rubric) but should declare the same set.
 
@@ -34,6 +38,13 @@ Only `@dataclass(frozen=True)` classes are scanned. Non-frozen dataclasses, `att
 **`protocol_modules`** — modules declaring `@runtime_checkable Protocol` classes that other code depends on structurally. Touched by Signal B (Protocol signature delta). Adding a new method to an existing Protocol does not fire; changing or removing an existing method signature does.
 
 Only `@runtime_checkable` Protocols are scanned. Plain `typing.Protocol` classes are visible to type-checkers but not to runtime `isinstance` — they're invisible to Signal B unless decorated.
+
+**`constant_files`** and **`algorithm_files`** (optional, issue #191) — opt into substance-based tiering for Signal A. A subset of `sensitive_files`, classified by *what kind* of change to them matters. By default (both empty) a sensitive-file touch forces `human_required` unconditionally — the file-level behavior. When either is populated, a sensitive touch forces `human_required` only when it is *substantive*:
+
+- a **`constant_files`** path with a constant-RHS modification — detected as a removed (`-`) line matching an `UPPER_SNAKE_CASE` assignment (optionally `: Final`-annotated). Adding a *new* constant (pure `+`) is additive, not a modification, and does not fire.
+- an **`algorithm_files`** path with an edit to an existing function body — detected as any deletion (`-`) in that file's diff. Appending a new function (pure `+`) is additive and does not fire.
+
+A purely structural-additive sensitive touch — a new field, a new helper, a docstring, or any touch to a sensitive file that is in *neither* list — falls through to the size/sweep logic and can auto-merge. Detection is conservative: when a per-file diff can't be retrieved or classified, it forces `human_required`. Two safety properties hold regardless: an *undeclared* sensitive touch is a reviewer blocker (the reviewer phase runs on every PR), and any co-firing architectural signal (B–F) still routes `human_required` on its own.
 
 **`numbered_catalogs`** — categories of numbered IDs that workers should resolve from `<CATEGORY>-NEXT` sentinels at plan time. Each category maps to one or more source files (or path globs) and a regex that captures the integer. The worker scans the sources, finds the highest existing integer for the category, and substitutes the sentinel with the next free integer (`max + 1`, or `1` if no matches exist).
 
