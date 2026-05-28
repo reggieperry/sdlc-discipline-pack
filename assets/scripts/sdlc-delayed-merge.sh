@@ -22,7 +22,9 @@
 # finalizer at this point; bd update works on closed beads.
 #
 # Tunables:
-#   SDLC_DELAYED_MERGE_ENABLED            default "true". Set "false" to skip.
+#   SDLC_DELAYED_MERGE_ENABLED            default "false" since issue #191 (the
+#                                          review_encouraged tier it served was
+#                                          removed). Set "true" to revive.
 #   SDLC_REVIEW_ENCOURAGED_DELAY_HOURS    default "24". Delay before auto-merge.
 #   SDLC_DELAYED_MERGE_OBJECTION_PATTERN  default "NACK|HOLD|VETO". egrep alternation.
 #   SDLC_DELAYED_MERGE_APPROVE_PATTERN    default "LGTM-AUTO|MERGE-NOW". egrep alternation.
@@ -34,7 +36,12 @@
 
 set -euo pipefail
 
-if [ "${SDLC_DELAYED_MERGE_ENABLED:-true}" != "true" ]; then
+# Dormant by default since issue #191 removed the review_encouraged tier that
+# this scanner serviced. The reviewer no longer emits review_encouraged, so the
+# scan below would match zero beads regardless; the default-off flag makes the
+# dormancy explicit and cheap. A rig that re-introduces a middle tier via
+# override sets SDLC_DELAYED_MERGE_ENABLED=true to revive it.
+if [ "${SDLC_DELAYED_MERGE_ENABLED:-false}" != "true" ]; then
     exit 0
 fi
 

@@ -119,7 +119,7 @@ sweep_rig() {
         fi
 
         # PR merged externally (human ran `gh pr merge` on a tier that the
-        # finalizer parked — review_encouraged or human_required). The
+        # finalizer parked — human_required, post issue #191). The
         # finalizer never sees the merge event; without this reconciler the
         # bead stays at final_state=pr_open_for_human forever, the
         # rebase-watcher's `final_state=merged` path is dead for the most

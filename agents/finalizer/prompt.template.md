@@ -320,7 +320,7 @@ Closes pack #83 Prong 2.
 The merge decision is a function of three inputs:
 
 1. **Auto-merge toggle** — per-bead `metadata.glance_merge` overrides the rig env default `SDLC_GLANCE_MERGE_DEFAULT`. When `false`, the bead always parks; the recommendation tier is not consulted.
-2. **Reviewer recommendation** — `metadata.review_recommendation` set by the reviewer phase (story 3 of v2.10.0). Three values: `glance_merge`, `review_encouraged`, `human_required`. Drives which tier the PR routes to.
+2. **Reviewer recommendation** — `metadata.review_recommendation` set by the reviewer phase. Two values: `glance_merge`, `human_required` (the middle `review_encouraged` tier was removed in issue #191). Drives which tier the PR routes to.
 3. **Safety floor** — the rubric at `$RIG_PACK/assets/scripts/sdlc-glance-rubric.sh`. A hard gate: a rubric failure parks the PR regardless of recommendation.
 
 The tier outcomes:
@@ -329,7 +329,6 @@ The tier outcomes:
 |---|---|---|---|
 | `false` (Mode B) | any | not run | park (`final_state=pr_open_for_human`) |
 | `true` | `glance_merge` | pass | merge immediately (`final_state=merged`) |
-| `true` | `review_encouraged` | pass | park (`final_state=pr_open_for_human`); the delayed-merge order picks it up |
 | `true` | `human_required` | pass | park (`final_state=pr_open_for_human`) |
 | `true` | any | fail | park (`final_state=pr_open_for_human`) — safety floor wins |
 
@@ -360,12 +359,6 @@ else
                   --set-metadata final_state="merged"
                 bd close $STORY_ID --reason "shipped: $PR_URL (auto-merged; recommendation=glance_merge)"
                 ;;
-            review_encouraged)
-                bd update $STORY_ID \
-                  --set-metadata "finalizer.completed_at=$(date -Iseconds)" \
-                  --set-metadata final_state="pr_open_for_human"
-                bd close $STORY_ID --reason "shipped to $PR_URL (delayed-merge tier; recommendation=review_encouraged)"
-                ;;
             *)
                 # human_required, MISSING_CONFIG-driven, or unrecognized — park.
                 bd update $STORY_ID \
@@ -388,9 +381,9 @@ fi
 
 `$RIG_PACK` is the absolute path to this pack inside the rig's tree (e.g., `<rig>/packs/sdlc-discipline`). Resolve it from your env or by walking up from your `work_dir`.
 
-Missing `review_recommendation` (rig hasn't deployed v2.10.0 yet, or the reviewer phase crashed) defaults to `human_required` via the `[ -z "$RECOMMENDATION" ] && RECOMMENDATION="human_required"` guard — the conservative tier.
+Missing `review_recommendation` (the reviewer phase crashed, or an older rig) defaults to `human_required` via the `[ -z "$RECOMMENDATION" ] && RECOMMENDATION="human_required"` guard — the conservative tier.
 
-The `review_encouraged` tier hands off to `orders/sdlc-delayed-merge.toml`, which runs on a 30m cooldown and decides whether to merge based on PR-comment overrides (`LGTM-AUTO`, `MERGE-NOW`) or the configured delay window (default 24h). See README's "Delayed-merge tier" section.
+The middle `review_encouraged` tier and its delayed-merge handoff were removed in issue #191 — the tier never gated a fix across the rig's history and the delayed-merge buffer never fired. The `orders/sdlc-delayed-merge.toml` order is kept dormant (it scans for `review_recommendation=review_encouraged`, which the reviewer no longer emits, so it is a no-op) and can be re-enabled by a rig that re-introduces a middle tier via override.
 
 ## Operator notification (pack #44)
 

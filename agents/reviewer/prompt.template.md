@@ -256,7 +256,7 @@ Each tech-debt finding in the prose Findings list above should have a correspond
 
 ## Merge readiness
 
-Recommendation: **<glance_merge | review_encouraged | human_required>**
+Recommendation: **<glance_merge | human_required>**
 
 Architectural signals: **<none fired | comma-separated letters>**
 
@@ -276,7 +276,7 @@ or
 
 Be specific in findings. "Looks fine" is not a finding. "<file>:<line> — <concrete observation>" is.
 
-The **Merge readiness** section renders the signals JSON for a human reader. Take the values from `$SIGNALS_JSON` captured above; do not re-derive them. The verdict (PASS/FAIL) is separate from the recommendation (glance_merge / review_encouraged / human_required) — a PASS verdict with a `human_required` recommendation means "no blockers, but the PR touches architectural surfaces and should not auto-merge."
+The **Merge readiness** section renders the signals JSON for a human reader. Take the values from `$SIGNALS_JSON` captured above; do not re-derive them. The verdict (PASS/FAIL) is separate from the recommendation (glance_merge / human_required) — a PASS verdict with a `human_required` recommendation means "no blockers, but the PR touches architectural surfaces and should not auto-merge." The two-tier model replaced the earlier three-tier one in issue #191: the middle `review_encouraged` tier was the residual fallthrough bucket, never gated a fix, and its delayed-merge buffer never fired; the reviewer phase still surfaces every finding regardless of tier.
 
 ## Commit the review to the feature branch
 
