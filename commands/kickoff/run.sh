@@ -63,11 +63,29 @@ else
     fi
 fi
 
-# Verify the story bead exists. A wrong bead ID fails fast here before
-# we set any metadata.
-if ! bd show "$STORY_ID" --json >/dev/null 2>&1; then
+# Verify the story bead exists and capture its metadata in one query. A
+# wrong bead ID fails fast here before we set any metadata.
+BEAD_JSON=$(bd show "$STORY_ID" --json 2>/dev/null || true)
+if [ -z "$BEAD_JSON" ]; then
     echo "sdlc-kickoff: story bead '$STORY_ID' not found in rig '$RIG'" >&2
     exit 1
+fi
+
+# Pack #197 — refuse to re-route a bead parked for a human decision.
+# requires_human_decision=true is set when a phase escalates a decision the
+# chain cannot make on its own (e.g. a gate block with no chain path; the
+# worker's rebase-signals escalation). The pool reconciler admits on
+# gc.routed_to + bd ready, so without this guard a kickoff re-opens and
+# re-routes the bead, re-spawning a worker into the identical dead-end
+# (Elder EL-173: three spawns). A non-"true" value (resolved / empty /
+# absent) does not block, so a resolved bead re-kicks normally; the operator
+# clears the flag via sdlc-human-decision.sh once the decision is made.
+HUMAN_DECISION=$(printf '%s' "$BEAD_JSON" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d[0].get("metadata") or {}).get("requires_human_decision","") if d else "")' \
+    2>/dev/null || true)
+if [ "$HUMAN_DECISION" = "true" ]; then
+    echo "sdlc-kickoff: $STORY_ID carries requires_human_decision=true; not re-routing (resolve it first, e.g. sdlc-human-decision.sh resolve $STORY_ID)." >&2
+    exit 0
 fi
 
 WORKER_TARGET="$RIG/$PACK.worker"
