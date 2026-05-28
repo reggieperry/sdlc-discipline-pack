@@ -445,7 +445,7 @@ R4 (LOC cap) and R6 (acceptance criteria) were removed in v2.10.0: the architect
 
 ## Architectural signals (v2.10.0)
 
-`assets/scripts/sdlc-architectural-signals.py` augments the rubric with AST-driven detection of architectural changes that should not auto-merge regardless of diff size. Seven signals: A sensitive-file delta, B Protocol signature delta, C frozen-dataclass field delta, D layer crossing, E public-name removal, F assertion-count regression, G mechanical sweep. Most route `recommendation = "human_required"`; the mechanical sweep (G) routes `glance_merge`, and Signal A's consequence depends on substance once the rig opts in (see below).
+`assets/scripts/sdlc-architectural-signals.py` augments the rubric with AST-driven detection of architectural changes that should never auto-merge regardless of diff size. Six signals (sensitive-file delta, Protocol signature delta, frozen-dataclass field delta, layer crossing, public-name removal, assertion-count regression); any one fires → `recommendation = "human_required"`.
 
 Rigs declare their architectural shape in `.claude/rules/project/architecture.toml`:
 
@@ -453,20 +453,9 @@ Rigs declare their architectural shape in `.claude/rules/project/architecture.to
 sensitive_files     = ["risk_parameters.py", "agents/risk_agent.py", "indicators/*.py"]
 domain_model_files  = ["core/state.py"]
 protocol_modules    = ["core/agent.py"]
-
-# Optional (issue #191) — opt into substance-based tiering for Signal A.
-# A subset of sensitive_files, classified by what kind of change matters:
-constant_files      = ["risk_parameters.py"]   # constant-RHS change forces human_required
-algorithm_files     = ["indicators/*.py"]      # algorithm-body edit forces human_required
 ```
 
 Without the file, the signals script defaults every PR to `human_required` — a rig that hasn't declared its shape can't be auto-merged safely. The full format spec lives in `overlay/per-provider/claude/.claude/rules/architecture-config.md` (auto-loads when the rig edits its `architecture.toml`).
-
-### Signal A consequence-split (issue #191)
-
-By default a sensitive-file touch forces `human_required` unconditionally. A rig can opt into substance-based tiering by classifying a subset of its sensitive files as `constant_files` and/or `algorithm_files`. Once opted in, a sensitive touch forces `human_required` only when it is *substantive* — a constant-RHS modification in a `constant_files` path, or an edit to an existing function body in an `algorithm_files` path. A purely structural-additive sensitive touch (a new field, a new helper, a docstring) falls through to the size/sweep logic and can auto-merge. With neither key set, Signal A keeps its unconditional consequence — fully backward-compatible, so the pack change lands inert until a rig opts in.
-
-Two safety properties hold regardless of opt-in: an *undeclared* sensitive-file touch is a reviewer blocker (the reviewer phase runs on every PR independent of the tier), and the substance detection is conservative — when a per-file diff can't be classified it forces `human_required`. The motivating case is the EL-164→EL-168 refactor on Elder (2026-05-26), which touched four sensitive files structurally and forced `human_required` on each despite being explicitly algorithm-preserving.
 
 ### Delayed-merge tier (dormant since issue #191)
 
