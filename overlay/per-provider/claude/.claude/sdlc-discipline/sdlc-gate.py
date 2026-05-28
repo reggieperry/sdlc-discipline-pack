@@ -51,6 +51,7 @@ file across rename map).
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -482,19 +483,147 @@ def _diff_errors(
     return blocks_out, advisories_out
 
 
+def _parse_waivers(raw: str | None) -> list[dict]:
+    """Parse the --assertion-loss-waiver JSON into a list of waiver dicts.
+
+    Accepts a single object or a list. A malformed or incomplete entry is
+    dropped — conservative, so the corresponding loss stays a hard block.
+    """
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        sys.stderr.write("sdlc-gate: --assertion-loss-waiver is not valid JSON; ignoring\n")
+        return []
+    items = data if isinstance(data, list) else [data]
+    out: list[dict] = []
+    for w in items:
+        if (
+            isinstance(w, dict)
+            and isinstance(w.get("file"), str)
+            and isinstance(w.get("migrated_to_test"), str)
+            and "expected_delta" in w
+        ):
+            out.append(w)
+    return out
+
+
+def _matching_waiver(waivers: list[dict], file: str) -> dict | None:
+    for w in waivers:
+        if w.get("file") == file:
+            return w
+    return None
+
+
+def _removed_assert_predicates(baseline_sha: str, file: str) -> list[str]:
+    """Normalized predicate text of each assertion removed from `file`
+    between the baseline commit and the working tree. Empty on git failure
+    (treated by the caller as a failed verification → block)."""
+    try:
+        out = subprocess.run(
+            ["git", "diff", baseline_sha, "--", file],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+    except OSError:
+        return []
+    preds: list[str] = []
+    for line in out.splitlines():
+        if not line.startswith("-") or line.startswith("---"):
+            continue
+        body = line[1:]
+        if not _ASSERT_KEYWORD.search(body):
+            continue
+        after = body.split("assert", 1)[1].strip()
+        # Drop a trailing assertion message: `assert <expr>, "msg"`.
+        after = re.split(r',\s*["\']', after, maxsplit=1)[0].strip()
+        norm = " ".join(after.split())
+        if norm:
+            preds.append(norm)
+    return preds
+
+
+def _sibling_test_haystack(root: Path, sibling: str) -> str | None:
+    """Whitespace-normalized source of the sibling file's collected `test_`
+    functions. None if the file is missing or unparseable (→ verification
+    fails). AST-scoping keeps module-level dead code / uncalled helpers from
+    satisfying predicate containment."""
+    try:
+        src = (root / sibling).read_text()
+    except OSError:
+        return None
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    chunks: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
+            "test_"
+        ):
+            seg = ast.get_source_segment(src, node)
+            if seg:
+                chunks.append(" ".join(seg.split()))
+    return " ".join(chunks)
+
+
+def _waiver_verifies(
+    waiver: dict,
+    file: str,
+    lost: int,
+    branch_pytest: dict,
+    baseline_sha: str,
+    root: Path,
+) -> bool:
+    """Three mechanical, git-only checks; ALL must pass. Any failure or
+    exception → False, so the loss stays a hard block (issue #199)."""
+    try:
+        # 1. Delta-exactness: declared delta must match the measured loss
+        #    exactly — a worker can only waive precisely what it declared.
+        expected_delta = int(waiver["expected_delta"])
+        if expected_delta >= 0 or lost != -expected_delta:
+            return False
+        sibling = waiver["migrated_to_test"]
+        # 2. Sibling-grew: the migration target carries >= lost assertions now.
+        if branch_pytest["asserts"].get(sibling, 0) < lost:
+            return False
+        # 3. Predicate-text containment: every removed predicate's text appears
+        #    in the sibling's collected test_ functions — a real relocation,
+        #    not a deletion dressed as one.
+        preds = _removed_assert_predicates(baseline_sha, file)
+        if not preds:
+            return False
+        haystack = _sibling_test_haystack(root, sibling)
+        if haystack is None:
+            return False
+        return all(p in haystack for p in preds)
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
 def _check_pytest_weakening(
     branch_pytest: dict,
     baseline_pytest: dict,
     rename_map: dict[str, str],
     deleted: set[str],
-) -> list[dict]:
+    waivers: list[dict] | None = None,
+    baseline_sha: str = "",
+    root: Path | None = None,
+) -> tuple[list[dict], list[dict]]:
     """Check D: new pytest.mark.skip markers + dropped assertion counts.
 
-    Returns a list of block dicts to append to the report. Skip-marker
-    increases (Check D.skips) and assertion-count regressions (Check
-    D.asserts) are both hard blocks — neither has an advisory branch.
+    Returns (blocks, advisories). Skip-marker increases (Check D.skips) are
+    always hard blocks. Assertion-count regressions (Check D.asserts) are
+    hard blocks too, EXCEPT when a spec-declared, mechanically-verified
+    migration waiver applies (issue #199) — those downgrade to an advisory.
     """
+    waivers = waivers or []
+    if root is None:
+        root = Path().resolve()
     blocks_out: list[dict] = []
+    advisories_out: list[dict] = []
 
     new_skips: list[dict] = []
     for file, n in branch_pytest["skips"].items():
@@ -509,17 +638,36 @@ def _check_pytest_weakening(
         blocks_out.append({"check": "D.skips", "kind": "new_skip_markers", "items": new_skips})
 
     lost_asserts: list[dict] = []
+    waived_asserts: list[dict] = []
     for bf, base_n in baseline_pytest["asserts"].items():
         if bf in deleted:
             continue
         new_f = rename_map.get(bf, bf)
         n = branch_pytest["asserts"].get(new_f, 0)
         if n < base_n:
-            lost_asserts.append({"file": new_f, "lost": base_n - n})
+            lost = base_n - n
+            waiver = _matching_waiver(waivers, new_f)
+            if waiver is not None and _waiver_verifies(
+                waiver, new_f, lost, branch_pytest, baseline_sha, root
+            ):
+                waived_asserts.append(
+                    {
+                        "file": new_f,
+                        "lost": lost,
+                        "migrated_to_test": waiver["migrated_to_test"],
+                        "migrated_in": waiver.get("migrated_in", ""),
+                    }
+                )
+            else:
+                lost_asserts.append({"file": new_f, "lost": lost})
     if lost_asserts:
         blocks_out.append({"check": "D.asserts", "kind": "lost_assertions", "items": lost_asserts})
+    if waived_asserts:
+        advisories_out.append(
+            {"check": "D.asserts", "kind": "waived_assertion_migration", "items": waived_asserts}
+        )
 
-    return blocks_out
+    return blocks_out, advisories_out
 
 
 def cmd_diff(args: argparse.Namespace) -> None:
@@ -566,8 +714,21 @@ def cmd_diff(args: argparse.Namespace) -> None:
     if deleted_tests:
         advisories.append({"check": "C", "kind": "test_deletions", "items": deleted_tests})
 
-    # Check D: pytest weakening (skips + lost asserts)
-    blocks.extend(_check_pytest_weakening(branch_pytest, baseline["pytest"], rename_map, deleted))
+    # Check D: pytest weakening (skips + lost asserts). A spec-declared,
+    # mechanically-verified migration waiver downgrades a matching D.asserts
+    # loss to advisory (issue #199); everything else stays a hard block.
+    waivers = _parse_waivers(getattr(args, "assertion_loss_waiver", None))
+    d_blocks, d_advisories = _check_pytest_weakening(
+        branch_pytest,
+        baseline["pytest"],
+        rename_map,
+        deleted,
+        waivers=waivers,
+        baseline_sha=baseline["sha"],
+        root=root,
+    )
+    blocks.extend(d_blocks)
+    advisories.extend(d_advisories)
 
     if blocks:
         verdict = "fail"
@@ -617,6 +778,19 @@ def main() -> None:
         help="Diff the current tree against a captured baseline; emit verdict",
     )
     p_diff.add_argument("--baseline-dir", required=True)
+    p_diff.add_argument(
+        "--assertion-loss-waiver",
+        default=None,
+        help=(
+            "JSON object (or list) declaring a sanctioned assertion-count loss: "
+            '{"file", "expected_delta" (negative), "migrated_to_test", "migrated_in"}. '
+            "A matching D.asserts loss downgrades to advisory only when the loss "
+            "equals the declared delta exactly, the migration target carries at "
+            "least that many assertions, and every removed predicate's text "
+            "appears in the target's test_ functions. The caller reads this from "
+            "the story's bead metadata (issue #199)."
+        ),
+    )
     p_diff.set_defaults(func=cmd_diff)
 
     args = parser.parse_args()

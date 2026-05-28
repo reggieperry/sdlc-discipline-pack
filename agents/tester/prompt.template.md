@@ -89,8 +89,16 @@ BASELINE_SHA=$(bd show $STORY_ID --json | jq -r '.[0].metadata."gate.baseline_sh
 RIG_ROOT_ABS=$(git rev-parse --show-toplevel)
 CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 
+# pack #199: a spec-declared assertion-loss migration waiver (JSON string in
+# bead metadata) is passed to the gate, which verifies it mechanically and
+# downgrades a matching D.asserts loss to advisory. Absent → no extra arg,
+# gate behaves exactly as before. The array preserves the JSON as one arg.
+WAIVER=$(bd show $STORY_ID --json | jq -r '.[0].metadata.assertion_loss_waiver // empty')
+WAIVER_ARGS=()
+[ -n "$WAIVER" ] && WAIVER_ARGS=(--assertion-loss-waiver "$WAIVER")
+
 GATE_REPORT=$(mktemp)
-python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" > "$GATE_REPORT"
+python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" "${WAIVER_ARGS[@]}" > "$GATE_REPORT"
 GATE_RC=$?
 GATE_VERDICT=$(jq -r '.verdict' "$GATE_REPORT")
 GATE_BLOCKS=$(jq -c '.blocks' "$GATE_REPORT")
@@ -115,7 +123,7 @@ if [ -z "$BASELINE_SHA" ] || [ "$BASELINE_SHA" = "null" ]; then
     fi
     bd update $STORY_ID --set-metadata gate.baseline_sha="$BASELINE_SHA" \
       --set-metadata gate.baseline_recovered="true"
-    python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" > "$GATE_REPORT"
+    python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" "${WAIVER_ARGS[@]}" > "$GATE_REPORT"
     GATE_RC=$?
     GATE_VERDICT=$(jq -r '.verdict' "$GATE_REPORT")
 fi

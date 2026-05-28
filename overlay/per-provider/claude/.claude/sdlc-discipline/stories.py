@@ -665,6 +665,14 @@ def build_graph_plan(
                     # audit flagged. Empty string when the spec was not derived
                     # from an audit doc (the common case).
                     "source_audit_doc": s.get("source_audit_doc") or "",
+                    # pack #199: spec-declared assertion-loss migration waiver,
+                    # a JSON string (the YAML subset has no nested maps, so it
+                    # is declared on one line and parsed as a scalar). The chain
+                    # phase that runs sdlc-gate.py reads this from bead metadata
+                    # and passes it as --assertion-loss-waiver; the gate verifies
+                    # it mechanically and downgrades a matching D.asserts loss to
+                    # advisory. Empty when the spec declares no waiver.
+                    "assertion_loss_waiver": s.get("assertion_loss_waiver") or "",
                 },
             }
         )

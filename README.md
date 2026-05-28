@@ -371,6 +371,14 @@ Mechanism:
 
 Identity model and known limits live in `overlay/per-provider/claude/.claude/sdlc-discipline/sdlc-gate.py`'s docstring. Within-`(file, code)` swaps are a known v2.4 gap (would require AST-anchored identity); fixed in v2.5 if the false-negative rate warrants it.
 
+**Assertion-loss migration waiver (issue #199).** The lost-assertion rule false-positives on legitimate test-consolidation, where assertions are not deleted but moved to a sibling test in a prior story. A spec opts into a waiver by declaring, in its frontmatter as a single-line JSON string (the YAML subset has no nested maps):
+
+```yaml
+assertion_loss_waiver: {"file": "tests/test_first_paper_trade_smoke.py", "expected_delta": -9, "migrated_to_test": "tests/test_long_pattern_fill_dispatch.py", "migrated_in": "EL-171"}
+```
+
+`stories.py` carries it into bead metadata; the chain phase passes it to the gate as `--assertion-loss-waiver`. The gate downgrades the matching `D.asserts` loss from a block to an advisory only when three git-only checks all pass: the measured loss equals `expected_delta` exactly, `migrated_to_test` carries at least that many assertions at the branch tip, and every removed assertion's predicate text appears in that target's collected `test_` functions (AST-scoped). Any failure keeps the hard block. The verification stays mechanical — no LLM in the path — so the gate-evasion defense holds: a forged waiver requires first relocating the same predicates into a real sibling test, at which point the coverage genuinely exists.
+
 ## Three operating modes
 
 Two env vars, set per-rig in `city.toml` via a patch on the finalizer agent, drive the three common scenarios.

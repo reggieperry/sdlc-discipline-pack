@@ -561,7 +561,14 @@ BASELINE_SHA=$(bd show {{story_id}} --json | jq -r '.[0].metadata."gate.baseline
 RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
 CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 
-python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR"
+# pack #199: pass a spec-declared assertion-loss migration waiver (JSON
+# string in bead metadata) to the gate, which verifies it mechanically and
+# downgrades a matching D.asserts loss to advisory. Absent → no extra arg.
+WAIVER=$(bd show {{story_id}} --json | jq -r '.[0].metadata.assertion_loss_waiver // empty')
+WAIVER_ARGS=()
+[ -n "$WAIVER" ] && WAIVER_ARGS=(--assertion-loss-waiver "$WAIVER")
+
+python3 .claude/sdlc-discipline/sdlc-gate.py diff --baseline-dir "$CACHE_DIR" "${WAIVER_ARGS[@]}"
 GATE_RC=$?
 ```
 
