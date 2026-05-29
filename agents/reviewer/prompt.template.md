@@ -161,8 +161,9 @@ The auto-loaded rules in `.claude/rules/` define the standards. As you read the 
 - `python.md` — typing, idiom adherence, function-length cap, prose-only docstrings, no broad except, no `dict[str, Any]` returns on the public surface.
 - `tdd.md` — tests precede implementation, test names describe behaviors, mocks-as-peers (not internals), allowance vs. expectation distinction, diagnostic messages on assertions in domain language.
 - `refactoring.md` — Two Hats discipline visible in the commits (no feature commit bundled with a refactor commit), refactor commits name moves from the catalog.
-- `modularity.md` — single abstraction per module, no god objects, no fat connections.
+- `modularity.md` — module depth (no shallow pass-through / middle-man whose interface mirrors its implementation), behavioral-LSP substitutability where inheritance is used (subtype preconditions no stronger, postconditions no weaker), no leaky resource (a raw vendor type — `httpx.Response`, an `ib_async` order — escaping a boundary), plus no god objects and no fat connections.
 - `code-structure.md` — Tell-Don't-Ask, domain-typed equality.
+- `ddd.md` — bounded-context boundaries hold: no domain type imported across a context boundary (import-linter already backstops cross-*package* imports, so look specifically for shared-state leaks via a shared module like `core/state` and aggregate roots constructed outside their factory); a touched persistence function carries its one-line Aggregate / Invariant / Boundary contract.
 - `decoupling.md` — only relevant if files under `.claude/` are touched.
 
 For each finding, classify as:
@@ -200,6 +201,8 @@ A review with any **blocker** fails. A review with only `tech-debt` and `nit` pa
 - Validator placement style, error-handling idiom preferences, comment density on security-relevant code
 
 Cite findings with the section name in the existing convention: `[blocker] [security:Secrets] core/api.py:42 — API key hardcoded in module constant` or `[tech-debt] [security:Trust boundaries] core/handlers.py:88 — raw dict consumed without validator`. The finalizer's tech-debt auto-file routes these directly.
+
+If the rig ships a project-level security overlay (e.g. `.claude/rules/project/security-*.md`), walk its sections too — rig overlays cover money-precision, broker-credential, connection-isolation, and order-idempotency concerns the pack-generic `security.md` explicitly disclaims.
 
 If the diff touches no Python code, Block H is a no-op. Note in the review file that the diff is doc-only or non-Python and proceed.
 
