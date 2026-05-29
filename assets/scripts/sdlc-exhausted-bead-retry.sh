@@ -41,9 +41,12 @@ if [ "${SDLC_EXHAUSTED_BEAD_RETRY_ENABLED:-false}" != "true" ]; then
     exit 0
 fi
 
-CITY_ROOT="${GC_CITY_ROOT:-}"
+# Resolve the city root via the shared resolver — gascity retired
+# GC_CITY_ROOT from the order-exec env (issue #204); it now emits GC_CITY.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CITY_ROOT=$(bash "$SCRIPT_DIR/lib/sdlc-find-city-root.sh" 2>/dev/null) || CITY_ROOT=""
 if [ -z "$CITY_ROOT" ] || [ ! -d "$CITY_ROOT" ]; then
-    echo "exhausted-bead-retry: GC_CITY_ROOT not set or missing" >&2
+    echo "exhausted-bead-retry: cannot resolve city root (GC_CITY_ROOT='${GC_CITY_ROOT:-}' GC_CITY='${GC_CITY:-}' PWD='$PWD')" >&2
     exit 0
 fi
 
@@ -58,7 +61,6 @@ NOTIFY="$PACK_DIR/assets/scripts/sdlc-notify.sh"
 # Locate the shared rig-enumeration library relative to this script.
 # Tests override PACK_DIR to point at a fake pack root; the library
 # always ships next to this script so prefer the script-relative path.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RIG_LISTER="$SCRIPT_DIR/lib/sdlc-list-rigs.sh"
 
 # Per-rig: walk closed AND open beads with any <template>.state=exhausted

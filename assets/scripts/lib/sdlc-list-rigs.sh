@@ -17,7 +17,7 @@
 #
 # Inputs:
 #   $1               Optional. City root path. Falls back to
-#                    $GC_CITY_ROOT, then $CITY_ROOT.
+#                    $GC_CITY_ROOT, then $GC_CITY, then $CITY_ROOT.
 #   $SDLC_LIST_RIGS_GC   Optional. Override the gc binary used for
 #                    enumeration. Tests substitute a fake here.
 #
@@ -40,7 +40,7 @@
 
 set -uo pipefail
 
-CITY_ROOT="${1:-${GC_CITY_ROOT:-${CITY_ROOT:-}}}"
+CITY_ROOT="${1:-${GC_CITY_ROOT:-${GC_CITY:-${CITY_ROOT:-}}}}"
 GC_BIN="${SDLC_LIST_RIGS_GC:-gc}"
 
 if [ -z "$CITY_ROOT" ]; then

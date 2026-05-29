@@ -34,6 +34,7 @@ def _invoke(
     *,
     marker: str = "",
     gc_city_root: str | None = None,
+    gc_city: str | None = None,
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess:
     env = {
@@ -45,6 +46,11 @@ def _invoke(
         env["GC_CITY_ROOT"] = gc_city_root
     else:
         env.pop("GC_CITY_ROOT", None)
+    if gc_city is not None:
+        env["GC_CITY"] = gc_city
+    else:
+        env.pop("GC_CITY", None)
+    env.pop("GC_CITY_PATH", None)
     args = [str(SCRIPT_PATH)]
     if marker:
         args.append(marker)
@@ -88,6 +94,67 @@ class GcCityRootTests(unittest.TestCase):
             spy_gc_cities(fakes)
 
             result = _invoke(fakes, gc_city_root=str(wrong), cwd=fakes)
+
+            self.assertNotEqual(result.returncode, 0)
+
+
+class GcCitySourceTests(unittest.TestCase):
+    """Source 1b: $GC_CITY (gascity's per-order city var since GC_CITY_ROOT
+    was retired from the order-exec env) resolves when GC_CITY_ROOT is unset."""
+
+    def test_gc_city_resolves_when_gc_city_root_unset(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city = tmp / "city"
+            city.mkdir()
+            (city / "city.toml").write_text("[city]\n")
+            fakes = tmp / "fakes"
+            fakes.mkdir()
+            spy_gc_cities(fakes)  # empty: GC_CITY must be what resolves
+
+            # cwd has no marker and `gc cities` is empty, so GC_CITY is the
+            # only viable source — and GC_CITY_ROOT is unset, mirroring the
+            # post-migration order-exec env gascity now hands the script.
+            result = _invoke(fakes, gc_city=str(city), cwd=fakes)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, str(city))
+
+    def test_gc_city_root_takes_precedence_over_gc_city(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            primary = tmp / "primary"
+            primary.mkdir()
+            (primary / "city.toml").write_text("[city]\n")
+            secondary = tmp / "secondary"
+            secondary.mkdir()
+            (secondary / "city.toml").write_text("[city]\n")
+            fakes = tmp / "fakes"
+            fakes.mkdir()
+            spy_gc_cities(fakes)
+
+            result = _invoke(
+                fakes,
+                gc_city_root=str(primary),
+                gc_city=str(secondary),
+                cwd=fakes,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, str(primary))
+
+    def test_gc_city_without_marker_falls_through(self) -> None:
+        """GC_CITY pointing somewhere without the marker falls through to
+        walk-up + gc cities, the same way GC_CITY_ROOT does."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            wrong = tmp / "wrong"
+            wrong.mkdir()
+            fakes = tmp / "fakes"
+            fakes.mkdir()
+            spy_gc_cities(fakes)
+
+            result = _invoke(fakes, gc_city=str(wrong), cwd=fakes)
 
             self.assertNotEqual(result.returncode, 0)
 

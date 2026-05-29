@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# sdlc-find-city-root.sh — resolve a gascity city root via three
+# sdlc-find-city-root.sh — resolve a gascity city root via four
 # sources, in priority order:
 #
-#   1. $GC_CITY_ROOT environment variable
-#   2. Walk up from $PWD looking for a marker file
-#   3. `gc cities` first row (the supervisor's source of truth)
+#   1.  $GC_CITY_ROOT environment variable (legacy; gascity no longer emits it)
+#   1b. $GC_CITY / $GC_CITY_PATH (what gascity emits per-order today)
+#   2.  Walk up from $PWD looking for a marker file
+#   3.  `gc cities` first row (the supervisor's source of truth)
 #
 # Subprocess-callable shell library. Standalone executable; callers
 # `bash "$PACK_DIR/assets/scripts/lib/sdlc-find-city-root.sh"` and
@@ -47,6 +48,16 @@ if [ -n "$CITY_ROOT" ] && [ -e "$CITY_ROOT/$MARKER" ]; then
     exit 0
 fi
 
+# Source 1b: GC_CITY / GC_CITY_PATH — the per-order city vars gascity
+# emits since GC_CITY_ROOT was retired from the order-exec env (the env
+# builder now strips any inherited GC_CITY_ROOT). Validated against the
+# marker, same as Source 1.
+CITY_ROOT="${GC_CITY:-${GC_CITY_PATH:-}}"
+if [ -n "$CITY_ROOT" ] && [ -e "$CITY_ROOT/$MARKER" ]; then
+    printf '%s' "$CITY_ROOT"
+    exit 0
+fi
+
 # Source 2: walk up from $PWD looking for the marker. Works when the
 # script fires from inside the city.
 probe="$PWD"
@@ -66,5 +77,5 @@ if [ -n "$GC_CITY_FALLBACK" ] && [ -e "$GC_CITY_FALLBACK/$MARKER" ]; then
     exit 0
 fi
 
-echo "sdlc-find-city-root: could not resolve city root (marker='$MARKER', GC_CITY_ROOT='${GC_CITY_ROOT:-}', PWD='$PWD')" >&2
+echo "sdlc-find-city-root: could not resolve city root (marker='$MARKER', GC_CITY_ROOT='${GC_CITY_ROOT:-}', GC_CITY='${GC_CITY:-}', PWD='$PWD')" >&2
 exit 1

@@ -36,9 +36,12 @@ if [ "${SDLC_DEEP_REASON_AUDIT_ENABLED:-false}" != "true" ]; then
     exit 0
 fi
 
-CITY_ROOT="${GC_CITY_ROOT:-}"
+# Resolve the city root via the shared resolver — gascity retired
+# GC_CITY_ROOT from the order-exec env (issue #204); it now emits GC_CITY.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CITY_ROOT=$(bash "$SCRIPT_DIR/lib/sdlc-find-city-root.sh" 2>/dev/null) || CITY_ROOT=""
 if [ -z "$CITY_ROOT" ] || [ ! -d "$CITY_ROOT" ]; then
-    echo "deep-reason-audit: GC_CITY_ROOT not set or missing; cannot enumerate rigs" >&2
+    echo "deep-reason-audit: cannot resolve city root (GC_CITY_ROOT='${GC_CITY_ROOT:-}' GC_CITY='${GC_CITY:-}' PWD='$PWD'); cannot enumerate rigs" >&2
     exit 0
 fi
 
@@ -47,7 +50,6 @@ if [ -z "${PACK_DIR:-}" ]; then
 fi
 
 NOTIFY="$PACK_DIR/assets/scripts/sdlc-notify.sh"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RIG_LISTER="$SCRIPT_DIR/lib/sdlc-list-rigs.sh"
 
 if [ ! -x "$RIG_LISTER" ]; then

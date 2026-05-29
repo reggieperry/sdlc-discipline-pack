@@ -184,6 +184,7 @@ class SweepIdempotencyTests(unittest.TestCase):
         self._tmpdir_ctx = TemporaryDirectory()
         self._tmp = Path(self._tmpdir_ctx.name)
         (self._tmp / "city").mkdir()
+        (self._tmp / "city" / "city.toml").write_text("[city]\n")
 
     def tearDown(self) -> None:
         self._tmpdir_ctx.cleanup()

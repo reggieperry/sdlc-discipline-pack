@@ -110,6 +110,7 @@ class SweeperReconciliationTests(unittest.TestCase):
         self._tmp = Path(self._tmpdir_ctx.name)
         (self._tmp / "pack").mkdir()
         (self._tmp / "city").mkdir()
+        (self._tmp / "city" / "city.toml").write_text("[city]\n")
         (self._tmp / "rig").mkdir()
         # Touch a fake pack overlay path the sweeper references (only matters
         # for the rebase path, but harmless to create).
@@ -291,6 +292,7 @@ class FeatureGateTests(unittest.TestCase):
         env.pop("SDLC_STALE_PR_SWEEPER_ENABLED", None)
         env.update(env_overrides)
         (tmp / "city").mkdir(parents=True, exist_ok=True)
+        (tmp / "city" / "city.toml").write_text("[city]\n")
         return subprocess.run(
             [str(SCRIPT_PATH)],
             env=env,

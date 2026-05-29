@@ -63,8 +63,9 @@ TARGET=$(echo "$BEAD_JSON" | jq -r '.[0].metadata.target // "main"')
 WORK_DIR=$(echo "$BEAD_JSON" | jq -r '.[0].metadata.work_dir // empty')
 RIG_ROOT="${GC_RIG_ROOT:-${WORK_DIR%/.gc/worktrees/*}}"
 if [ -z "$RIG_ROOT" ] || [ ! -d "$RIG_ROOT" ]; then
-    if [ -n "${GC_CITY_ROOT:-}" ] && [ -d "$GC_CITY_ROOT" ]; then
-        RIG_ROOT=$(cd "$GC_CITY_ROOT" && gc rig list --json 2>/dev/null \
+    CITY_FOR_LOOKUP="${GC_CITY_ROOT:-${GC_CITY:-}}"  # GC_CITY_ROOT retired; gascity emits GC_CITY (issue #204)
+    if [ -n "$CITY_FOR_LOOKUP" ] && [ -d "$CITY_FOR_LOOKUP" ]; then
+        RIG_ROOT=$(cd "$CITY_FOR_LOOKUP" && gc rig list --json 2>/dev/null \
             | jq -r --arg rig "$RIG" '.rigs[] | select(.name == $rig) | .path' 2>/dev/null || true)
     fi
 fi
