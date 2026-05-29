@@ -40,13 +40,15 @@ if [ "${SDLC_CROSS_BATCH_DEP_WATCHER_ENABLED:-true}" != "true" ]; then
     exit 0
 fi
 
-CITY_ROOT="${GC_CITY_ROOT:-}"
+# Resolve the city root via the shared resolver — gascity retired
+# GC_CITY_ROOT from the order-exec env (issue #204); it now emits GC_CITY.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CITY_ROOT=$(bash "$SCRIPT_DIR/lib/sdlc-find-city-root.sh" 2>/dev/null) || CITY_ROOT=""
 if [ -z "$CITY_ROOT" ] || [ ! -d "$CITY_ROOT" ]; then
-    echo "cross-batch-dep-watcher: GC_CITY_ROOT not set or missing; cannot enumerate rigs" >&2
+    echo "cross-batch-dep-watcher: cannot resolve city root (GC_CITY_ROOT='${GC_CITY_ROOT:-}' GC_CITY='${GC_CITY:-}' PWD='$PWD'); cannot enumerate rigs" >&2
     exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RIG_LISTER="${SDLC_CROSS_BATCH_DEP_WATCHER_RIG_LISTER:-$SCRIPT_DIR/lib/sdlc-list-rigs.sh}"
 NOTIFY="${SDLC_CROSS_BATCH_DEP_WATCHER_NOTIFY:-$SCRIPT_DIR/sdlc-notify.sh}"
 

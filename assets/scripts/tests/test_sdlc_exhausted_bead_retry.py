@@ -36,6 +36,7 @@ def _setup_rig(tmp: Path, rig_name: str = "test-rig") -> tuple[Path, Path, Path]
     fakes_dir = tmp / "fakes"
     rig_root.mkdir(parents=True)
     fakes_dir.mkdir(parents=True)
+    (city_root / "city.toml").write_text("[city]\n")
     return city_root, rig_root, fakes_dir
 
 

@@ -90,6 +90,7 @@ def _setup_rig(tmp: Path, rig_name: str = "test-rig") -> tuple[Path, Path, Path]
     fakes_dir = tmp / "fakes"
     stories_dir.mkdir(parents=True)
     fakes_dir.mkdir(parents=True)
+    (city_root / "city.toml").write_text("[city]\n")
     return city_root, rig_root, fakes_dir
 
 
@@ -99,14 +100,25 @@ def _rig_list_json(rig_name: str, rig_root: Path) -> str:
     )
 
 
-def _invoke(fakes_dir: Path, city_root: Path, enabled: bool = True) -> subprocess.CompletedProcess:
+def _invoke(
+    fakes_dir: Path,
+    city_root: Path,
+    enabled: bool = True,
+    *,
+    city_var: str = "GC_CITY_ROOT",
+) -> subprocess.CompletedProcess:
     env = {
         **os.environ,
         "PATH": f"{fakes_dir}:{os.environ['PATH']}",
-        "GC_CITY_ROOT": str(city_root),
         "PACK_DIR": str(fakes_dir / "fake-pack"),
         "SDLC_ZOMBIE_RECONCILER_ENABLED": "true" if enabled else "false",
     }
+    # Point the script at the fake city via the requested var, clearing the
+    # others so the resolver must use city_var. city_var="GC_CITY" mirrors
+    # gascity's post-GC_CITY_ROOT-retirement order-exec env (issue #204).
+    for _var in ("GC_CITY_ROOT", "GC_CITY", "GC_CITY_PATH"):
+        env.pop(_var, None)
+    env[city_var] = str(city_root)
     return subprocess.run(
         [str(SCRIPT_PATH)],
         env=env,
@@ -157,6 +169,31 @@ class FeatureGateTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
             self.assertTrue((fakes_dir / "gc-argv.log").exists(), "gc must be invoked when enabled")
+
+
+class PostMigrationEnvTests(unittest.TestCase):
+    """The reconciler resolves its city root from GC_CITY when GC_CITY_ROOT is
+    unset — the env shape gascity hands the order since GC_CITY_ROOT was retired
+    from order-exec (issue #204). Proves the script gets past the city-root guard
+    to enumerate rigs instead of silently no-op'ing on the live box."""
+
+    def test_resolves_via_gc_city_and_enumerates(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root, enabled=True, city_var="GC_CITY")
+
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            self.assertTrue(
+                (fakes_dir / "gc-argv.log").exists(),
+                "reconciler must resolve the city via GC_CITY and invoke gc rig list",
+            )
 
 
 class HighConfidenceArchiveTests(unittest.TestCase):
@@ -334,7 +371,7 @@ class NoCityRootTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
-            self.assertIn("GC_CITY_ROOT not set", result.stderr)
+            self.assertIn("cannot resolve city root", result.stderr)
 
 
 class PostMergeWritebackTests(unittest.TestCase):

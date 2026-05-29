@@ -12,7 +12,8 @@
 #   GC_EVENT_TYPE       e.g. "bead.closed"
 #   GC_EVENT_SUBJECT    the closed bead ID
 #   GC_EVENT_PAYLOAD    JSON payload of the event
-#   GC_CITY_ROOT        absolute path to the city root (where cost_history.csv lives)
+#   GC_CITY             absolute path to the city root (where cost_history.csv
+#                       lives); GC_CITY_ROOT was retired from order-exec (issue #204)
 #
 # Schema (cost_history.csv):
 #   timestamp, story_id, phase, session_id, duration_seconds, cost_usd, rig
@@ -26,7 +27,7 @@
 set -euo pipefail
 
 BEAD_ID="${GC_EVENT_SUBJECT:-}"
-CITY_ROOT="${GC_CITY_ROOT:-$(pwd)}"
+CITY_ROOT="${GC_CITY_ROOT:-${GC_CITY:-$(pwd)}}"  # GC_CITY_ROOT retired; gascity emits GC_CITY (issue #204)
 CSV="$CITY_ROOT/cost_history.csv"
 
 # No bead ID → nothing to do. Order may fire for non-bead events.

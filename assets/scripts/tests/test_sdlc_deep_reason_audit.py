@@ -51,6 +51,7 @@ def _setup_rig_with_tags(tmp: Path, rig_name: str, tags: list[str]) -> Path:
     city_root = tmp / "city"
     rig_root = city_root / rig_name
     rig_root.mkdir(parents=True)
+    (city_root / "city.toml").write_text("[city]\n")
     _git(rig_root, "init", "-q", "-b", "main")
     for i, tag in enumerate(tags):
         (rig_root / f"file-{i}.txt").write_text(f"content {i}\n")
@@ -170,6 +171,7 @@ class AuditGenerationTests(unittest.TestCase):
             city_root = tmp / "city"
             rig_root = city_root / "alpha"
             rig_root.mkdir(parents=True)
+            (city_root / "city.toml").write_text("[city]\n")
             _git(rig_root, "init", "-q", "-b", "main")
             (rig_root / "init.txt").write_text("init\n")
             _git(rig_root, "add", ".")
