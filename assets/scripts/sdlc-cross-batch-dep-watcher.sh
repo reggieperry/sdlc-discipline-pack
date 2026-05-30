@@ -162,12 +162,16 @@ EOF
 walk_rig() {
     local rig="$1"
 
-    # Filter on --status=deferred: the marker metadata sits on deferred
-    # beads by construction (stories.py:cmd_file sets defer + metadata
-    # together per pack #154). A --status=open filter would exclude the
-    # watcher's entire workload — see pack #179.
+    # Filter on --status=open: a deferred bead (future defer_until) has
+    # status=open in bd — there is no "deferred" status — so a
+    # --status=deferred query matches nothing and the watcher's entire
+    # workload is invisible to its own scan (the pack #179 regression,
+    # fixed in #208; verified empirically 2026-05-29). The
+    # cross_batch_dep_predecessors marker scopes the result to pending-admit
+    # beads, and admitting clears the marker, so an admitted bead drops out
+    # of the next scan.
     local beads_json
-    beads_json=$(gc bd --rig "$rig" list --status=deferred --limit 5000 --json 2>/dev/null || echo "[]")
+    beads_json=$(gc bd --rig "$rig" list --status=open --limit 5000 --json 2>/dev/null || echo "[]")
     if ! echo "$beads_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
         return 0
     fi

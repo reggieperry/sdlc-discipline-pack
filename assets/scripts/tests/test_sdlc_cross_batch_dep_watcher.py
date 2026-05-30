@@ -53,10 +53,10 @@ def _make_gc_fake(
     """Spawn a `gc` fake that dispatches the four subcommand shapes
     the watcher calls.
 
-    - `gc bd --rig <rig> list --status=deferred --limit 5000 --json`
-      → echoes `bead_list_json`. The status filter changed from `open` to
-      `deferred` in pack #179; the fake ignores the filter and returns
-      whatever `bead_list_json` is set to regardless.
+    - `gc bd --rig <rig> list --status=<s> --limit 5000 --json`
+      → echoes the beads in `bead_list_json` whose `.status` equals the
+      queried `--status` value (modeling bd: a deferred bead has
+      `status=open`, so `--status=deferred` matches nothing). See #208.
     - `gc bd --rig <rig> show <bead-id> --json`
       → looks up `bead_show_responses[bead_id]` and echoes; defaults to `[]`.
     - `gc bd --rig <rig> update <bead-id> ...` → exit 0, argv logged.
@@ -82,7 +82,9 @@ def _make_gc_fake(
         '    sub="$1"\n'
         "    shift || true\n"
         '    if [ "$sub" = "list" ]; then\n'
-        "        cat <<'__LIST_EOF__'\n"
+        '        status=""\n'
+        '        for a in "$@"; do case "$a" in --status=*) status="${a#--status=}";; esac; done\n'
+        "        cat <<'__LIST_EOF__' | jq --arg s \"$status\" '[.[] | select(.status == $s)]'\n"
         f"{bead_list_json}\n"
         "__LIST_EOF__\n"
         "        exit 0\n"
@@ -384,25 +386,25 @@ class CrossBatchDepWatcherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertEqual(self._gc_calls(), [], msg="no gc calls expected when gated off")
 
-    def test_watcher_queries_deferred_beads_not_open(self) -> None:
-        """The watcher's `bd list` call must filter on `--status=deferred`.
+    def test_watcher_queries_open_beads_not_deferred(self) -> None:
+        """The watcher's `bd list` call must filter on `--status=open`.
 
-        The beads holding `cross_batch_dep_predecessors` metadata are
-        `status=deferred` (set by `stories.py:cmd_file` via
-        `bd update --defer 2099-01-01 --set-metadata cross_batch_dep_predecessors=...`
-        per pack #154). A `--status=open` filter excludes them entirely —
-        the watcher's entire workload would be invisible to its own selection
-        query. Pinned by pack #179 after the 2026-05-25 deep-reason
-        diagnostic surfaced the latent bug.
+        A deferred bead (future `defer_until`, set by `stories.py:cmd_file`
+        via `bd update --defer 2099-01-01 --set-metadata
+        cross_batch_dep_predecessors=...` per pack #154) has `status=open`
+        in bd — there is no `deferred` status. A `--status=deferred` filter
+        matches nothing, so the watcher's entire workload is invisible to
+        its own scan. This reverts the pack #179 regression (#208); verified
+        empirically against bd on 2026-05-29.
         """
-        succ = _bead("bd-succ-deferred", predecessors_csv="bd-pred-deferred")
-        pred = _pred_bead("bd-pred-deferred", final_state="merged")
+        succ = _bead("bd-succ-open", predecessors_csv="bd-pred-open")
+        pred = _pred_bead("bd-pred-open", final_state="merged")
         gc_fake = _make_gc_fake(
             self._tmp,
             "elder",
             str(self._tmp / "rig"),
             bead_list_json=json.dumps([succ]),
-            bead_show_responses={"bd-pred-deferred": json.dumps([pred])},
+            bead_show_responses={"bd-pred-open": json.dumps([pred])},
         )
         gh_fake = _make_gh_fake(self._tmp, {})
         notify_fake = _make_notify_fake(self._tmp)
@@ -414,19 +416,18 @@ class CrossBatchDepWatcherTests(unittest.TestCase):
         calls = self._gc_calls()
         list_calls = [c for c in calls if "list" in c and "--status=" in c]
         self.assertTrue(
-            any("--status=deferred" in c for c in list_calls),
+            any("--status=open" in c for c in list_calls),
             msg=(
-                "watcher must list --status=deferred (the marker metadata "
-                "only sits on deferred beads); see pack #179. "
+                "watcher must list --status=open (a deferred bead is "
+                "status=open; --status=deferred matches nothing); see #208. "
                 f"got list calls: {list_calls}"
             ),
         )
         self.assertFalse(
-            any("--status=open" in c for c in list_calls),
+            any("--status=deferred" in c for c in list_calls),
             msg=(
-                "watcher must NOT list --status=open (that filter excludes "
-                "its entire workload); see pack #179. "
-                f"got list calls: {list_calls}"
+                "watcher must NOT list --status=deferred (matches no bead); "
+                f"see #208. got list calls: {list_calls}"
             ),
         )
 
