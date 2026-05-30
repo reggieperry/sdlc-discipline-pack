@@ -139,7 +139,9 @@ sweep_rig() {
             merged_at=$(echo "$merged_pr_state" | jq -r '.mergedAt // empty')
             merged_sha=$(echo "$merged_pr_state" | jq -r '.mergeCommit.oid // empty')
             echo "sweeper: PR #$pr_number ($story_id) merged externally; reconciling bead metadata (final_state=merged)" >&2
-            cd "$rig_root" && bd update "$story_id" \
+            # #210: update the BEAD id, not the story id — bd can't resolve a
+            # story_id, and `|| true` below hid the failure (silent no-op).
+            cd "$rig_root" && bd update "$bead_id" \
                 --set-metadata "final_state=merged" \
                 ${merged_at:+--set-metadata "final_merged_at=$merged_at"} \
                 ${merged_sha:+--set-metadata "final_merged_sha=$merged_sha"} \

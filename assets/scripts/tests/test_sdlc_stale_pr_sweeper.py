@@ -55,7 +55,11 @@ def _bead_json(
     final_state: str = "pr_open_for_human",
     pr_url: str = "https://github.com/example/repo/pull/100",
     rig: str = "elder",
+    story_id: str = "EL-9001",
 ) -> str:
+    # story_id is DISTINCT from bead_id by default: a spec's story_id (EL-9001)
+    # is not its bead id (el-test). #210 — the reconcile path must `bd update`
+    # the bead id, not the story id; an equal-id fake hid that bug.
     return json.dumps(
         [
             {
@@ -65,7 +69,7 @@ def _bead_json(
                     "rig": rig,
                     "final_state": final_state,
                     "pr_url": pr_url,
-                    "story_id": bead_id,
+                    "story_id": story_id,
                 },
             }
         ]
@@ -187,8 +191,8 @@ class SweeperReconciliationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
         py_calls = self._python_calls()
         self.assertTrue(
-            any("rebase" in c and "el-test" in c for c in py_calls),
-            f"expected stories.py rebase call; got {py_calls}",
+            any("rebase" in c and "EL-9001" in c for c in py_calls),
+            f"expected stories.py rebase call on the story id; got {py_calls}",
         )
 
     def test_clean_pr_no_action(self) -> None:
@@ -231,7 +235,8 @@ class SweeperReconciliationTests(unittest.TestCase):
         update_calls = [c for c in bd_calls if c.startswith("update ")]
         self.assertTrue(update_calls, f"expected bd update call; got bd_calls={bd_calls}")
         joined = " | ".join(update_calls)
-        self.assertIn("el-test", joined)
+        self.assertIn("el-test", joined)  # #210: the BEAD id
+        self.assertNotIn("EL-9001", joined)  # #210: NOT the story id
         self.assertIn("final_state=merged", joined)
         self.assertIn("final_merged_at=2026-05-22T20:00:00Z", joined)
         self.assertIn("final_merged_sha=abc123def456abc123def456abc123def456abc1", joined)

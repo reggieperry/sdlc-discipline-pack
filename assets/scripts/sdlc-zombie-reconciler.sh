@@ -131,22 +131,40 @@ def parse_frontmatter(spec_path: Path) -> dict:
     return fm
 
 
-def query_bd_for_story(story_id: str) -> dict | None:
-    """Return the most recent closed bead with metadata.story_id == story_id,
-    or None. Filters in jq via the subprocess; expects bd's --json output."""
+_closed_beads_cache: list[dict] | None = None
+
+
+def _all_closed_beads() -> list[dict]:
+    """The rig's closed beads, fetched ONCE per run and memoized (#210).
+
+    Previously this query ran per-spec (~9s each on ~20k closed beads), so
+    ~57 specs serialized to ~500s and blew the 5m order deadline. The closed
+    set is identical across specs in one run, so one fetch serves them all.
+    The limit is raised to 50000 so a large closed-bead table is not silently
+    truncated (the old 5000 cap dropped any zombie sorting past position 5000).
+    """
+    global _closed_beads_cache
+    if _closed_beads_cache is not None:
+        return _closed_beads_cache
     try:
         proc = subprocess.run(
-            ["bd", "-C", str(RIG_ROOT), "list", "--status=closed", "--limit", "5000", "--json"],
+            ["bd", "-C", str(RIG_ROOT), "list", "--status=closed", "--limit", "50000", "--json"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
         )
-        if proc.returncode != 0:
-            return None
-        beads = json.loads(proc.stdout or "[]")
+        _closed_beads_cache = (
+            json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
+        )
     except (subprocess.SubprocessError, json.JSONDecodeError):
-        return None
-    for bead in beads:
+        _closed_beads_cache = []
+    return _closed_beads_cache
+
+
+def query_bd_for_story(story_id: str) -> dict | None:
+    """Return the most recent closed bead with metadata.story_id == story_id,
+    or None. Reads from the per-run closed-bead cache (#210)."""
+    for bead in _all_closed_beads():
         meta = bead.get("metadata") or {}
         if meta.get("story_id") == story_id:
             final_state = meta.get("final_state")
@@ -226,7 +244,11 @@ def main() -> None:
         signal = ""
         if bead is not None:
             meta = bead.get("metadata") or {}
-            pr_url = meta.get("pr_url") or ""
+            # #210: keep the PR link when a bead carries merged_pr but no
+            # pr_url (e.g. a manually reconciled bead).
+            pr_url = meta.get("pr_url") or (
+                f"#{meta['merged_pr']}" if meta.get("merged_pr") else ""
+            )
             pr_sha = meta.get("final_merged_sha") or ""
             bead_id = bead.get("id") or ""
             signal = "bead-metadata"
