@@ -555,6 +555,90 @@ class PostMergeWritebackTests(unittest.TestCase):
             )
 
 
+class Issue210Tests(unittest.TestCase):
+    """#210 — the reconciler ran but timed out: it queried the closed-bead
+    list once per spec (~9s each on ~20k closed beads), so ~57 specs blew the
+    5m order deadline. Cache the query once per run; keep the PR link when a
+    bead carries merged_pr but no pr_url."""
+
+    def test_closed_bead_query_is_cached_once_per_run(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            _write_spec(rig_root / "stories", "EL-134", status="ready")
+            _write_spec(rig_root / "stories", "EL-135", status="ready")
+            beads_json = json.dumps(
+                [
+                    {
+                        "id": "el-a",
+                        "status": "closed",
+                        "metadata": {
+                            "story_id": "EL-134",
+                            "final_state": "merged",
+                            "pr_url": "https://github.com/x/y/pull/1",
+                        },
+                    },
+                    {
+                        "id": "el-b",
+                        "status": "closed",
+                        "metadata": {
+                            "story_id": "EL-135",
+                            "final_state": "merged",
+                            "pr_url": "https://github.com/x/y/pull/2",
+                        },
+                    },
+                ]
+            )
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root)
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            archive_text = (fakes_dir / "stories-archive-argv.log").read_text()
+            self.assertIn("EL-134", archive_text)
+            self.assertIn("EL-135", archive_text)
+            bd_calls = (fakes_dir / "bd-argv.log").read_text().strip().splitlines()
+            list_calls = [c for c in bd_calls if "list" in c and "--status=closed" in c]
+            self.assertEqual(
+                len(list_calls),
+                1,
+                f"closed-bead list must be queried ONCE per run, not per spec; got {list_calls}",
+            )
+
+    def test_archive_uses_merged_pr_when_pr_url_absent(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            _write_spec(rig_root / "stories", "EL-179", status="ready")
+            beads_json = json.dumps(
+                [
+                    {
+                        "id": "el-r5",
+                        "status": "closed",
+                        "metadata": {
+                            "story_id": "EL-179",
+                            "final_state": "merged",
+                            "merged_pr": 553,
+                        },
+                    },
+                ]
+            )
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir)
+            spy_python3_stories_archive(fakes_dir)
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root)
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            archive_text = (fakes_dir / "stories-archive-argv.log").read_text()
+            self.assertIn("EL-179", archive_text)
+            self.assertIn("553", archive_text)  # the PR ref, not an empty --pr
+
+
 class IntervalConfigTests(unittest.TestCase):
     """Pin the order's TOML interval at the operator-calibrated cadence.
 
