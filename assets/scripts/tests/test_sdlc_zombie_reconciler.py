@@ -664,5 +664,96 @@ class IntervalConfigTests(unittest.TestCase):
         )
 
 
+class ArchiveCommitTests(unittest.TestCase):
+    """Pack #219 — the reconciler must COMMIT and PUSH its archive moves.
+
+    Pre-fix it ran `stories.py archive` (which moves active -> _archive on
+    disk) but never git-committed, leaving the rig dirty and the archive
+    unpropagated to origin. This test git-inits the rig + a bare remote and
+    runs the REAL `stories.py archive` (no `spy_python3_stories_archive`),
+    then asserts a commit landed staging the move, the tree is clean, and
+    origin advanced.
+    """
+
+    @staticmethod
+    def _git(rig: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(rig), *args], capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def test_archive_is_committed_and_pushed(self) -> None:
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            _write_spec(rig_root / "stories", "EL-901", status="filed", filed_as_bead="el-901bd")
+
+            # git rig + bare remote so the reconciler has somewhere to push.
+            remote = tmp / "remote.git"
+            subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+            self._git(rig_root, "init", "-q", "-b", "main")
+            self._git(rig_root, "config", "user.email", "t@t")
+            self._git(rig_root, "config", "user.name", "t")
+            self._git(rig_root, "config", "commit.gpgsign", "false")
+            self._git(rig_root, "add", "-A")
+            self._git(rig_root, "commit", "-q", "-m", "initial")
+            self._git(rig_root, "remote", "add", "origin", str(remote))
+            self._git(rig_root, "push", "-q", "-u", "origin", "main")
+            head_before = self._git(rig_root, "rev-parse", "HEAD")
+
+            beads_json = json.dumps(
+                [
+                    {
+                        "id": "el-901bd",
+                        "status": "closed",
+                        "metadata": {"story_id": "EL-901", "final_state": "pr_open_for_human"},
+                    }
+                ]
+            )
+            prs_json = json.dumps(
+                [
+                    {
+                        "number": 901,
+                        "title": "EL-901: thing",
+                        "headRefName": "feature/el-901bd",
+                        "url": "https://github.com/x/y/pull/901",
+                        "mergeCommit": {"oid": "abc1234"},
+                        "mergedAt": "2026-05-31T00:00:00Z",
+                    }
+                ]
+            )
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(fakes_dir, list_response=beads_json)
+            spy_gh_pr_list(fakes_dir, pr_list_response=prs_json)
+            # No spy_python3_stories_archive — the REAL stories.py archive moves the files.
+            _setup_fake_pack_with_notify(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root, enabled=True)
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+
+            # the spec actually moved
+            self.assertFalse(
+                (rig_root / "stories" / "EL-901-test.md").exists(), "active spec should be gone"
+            )
+            self.assertTrue(
+                list((rig_root / "stories" / "_archive").glob("EL-901-*.md")),
+                "the _archive copy should exist",
+            )
+            # a commit landed staging the move, and the tree is clean afterward
+            head_after = self._git(rig_root, "rev-parse", "HEAD")
+            self.assertNotEqual(head_before, head_after, "reconciler must COMMIT the archive move")
+            committed = self._git(rig_root, "show", "--name-status", "--format=", "HEAD")
+            self.assertIn("EL-901", committed)
+            self.assertIn("_archive/", committed)
+            self.assertEqual(
+                self._git(rig_root, "status", "--porcelain"), "", "rig must be clean after archive"
+            )
+            # the archive commit was PUSHED to origin
+            self.assertEqual(
+                self._git(rig_root, "rev-parse", "HEAD"),
+                self._git(rig_root, "rev-parse", "origin/main"),
+                "archive commit must be pushed to origin",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

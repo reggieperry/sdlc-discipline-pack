@@ -293,6 +293,7 @@ PYEOF
 
     local archived=0
     local archive_failed=0
+    local archived_ids=()
     while IFS= read -r action_json; do
         [ -z "$action_json" ] && continue
         local story_id pr_url pr_sha bead_id
@@ -308,6 +309,7 @@ PYEOF
 
         if (cd "$rig_root" && "${cmd[@]}" >/dev/null 2>&1); then
             archived=$((archived + 1))
+            archived_ids+=("$story_id")
             echo "zombie-reconciler: rig=$rig archived $story_id (pr=$pr_url)" >&2
             # pack #170: advance the predecessor bead's final_state to
             # "merged" so the cross-batch dep watcher (v2.32.0) clears
@@ -325,6 +327,32 @@ PYEOF
             echo "zombie-reconciler: rig=$rig FAILED to archive $story_id" >&2
         fi
     done <<< "$actions_out"
+
+    # pack #219: commit + push the archive moves. stories.py archive moves the
+    # spec active -> _archive on disk but does NOT git-commit, so without this
+    # the rig is left dirty and the archive never reaches origin (every later
+    # run re-detects siblings and the rig accumulates uncommitted renames).
+    # Stage ONLY the specs we archived (never `git add -A` — the rig may carry
+    # unrelated uncommitted state). Commit only on main; push is best-effort.
+    if [ "$archived" -gt 0 ]; then
+        local branch
+        branch=$(git -C "$rig_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+        if [ "$branch" != "main" ]; then
+            echo "zombie-reconciler: rig=$rig on branch '$branch' (not main); leaving $archived archive move(s) uncommitted for the operator" >&2
+        else
+            local sid
+            for sid in "${archived_ids[@]}"; do
+                git -C "$rig_root" add -A -- "stories/${sid}-*.md" "stories/_archive/${sid}-*.md" 2>/dev/null || true
+            done
+            if git -C "$rig_root" commit -q -m "docs(stories): zombie-reconciler archived ${archived_ids[*]}" 2>/dev/null; then
+                if ! git -C "$rig_root" push -q origin main 2>/dev/null; then
+                    echo "zombie-reconciler: rig=$rig archive committed locally but PUSH FAILED (non-fatal)" >&2
+                fi
+            else
+                echo "zombie-reconciler: rig=$rig git commit of archive moves FAILED (non-fatal)" >&2
+            fi
+        fi
+    fi
 
     if [ "$archived" -gt 0 ] || [ "$archive_failed" -gt 0 ]; then
         if [ -x "$NOTIFY" ]; then
