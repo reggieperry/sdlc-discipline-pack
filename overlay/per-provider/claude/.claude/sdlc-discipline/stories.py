@@ -278,12 +278,61 @@ def cmd_validate(args: argparse.Namespace) -> int:
     if cycle:
         errors.append("dependency cycle: " + " -> ".join(cycle))
 
+    # pack #213 v1: same-file co-location among ready stories with no dep edge.
+    # NON-FATAL — sensitive_files is a co-location hint, not a verified write-
+    # write conflict, so this never fails validation. It surfaces the risk that
+    # filing two ready stories that touch the same file as a parallel batch
+    # opens colliding PRs (only the first merges clean; the rest go CONFLICTING
+    # and need manual rebase). The fix is operator-side: file predecessor-first
+    # with `deps:` so the cross-batch-dep-watcher gates the merge order. The
+    # reviewer-phase changed-files cross-check (which sees the real diff, not a
+    # declaration) is the deferred, higher-value successor.
+    warnings: list[str] = []
+    dep_graph = {s["story_id"]: list(s.get("deps") or []) for s in stories}
+
+    def _dep_reaches(src: str, dst: str) -> bool:
+        seen: set[str] = set()
+        stack = list(dep_graph.get(src, []))
+        while stack:
+            node = stack.pop()
+            if node == dst:
+                return True
+            if node in seen:
+                continue
+            seen.add(node)
+            stack.extend(dep_graph.get(node, []))
+        return False
+
+    ready = [s for s in stories if s.get("status") == "ready" and (s.get("sensitive_files") or [])]
+    for i in range(len(ready)):
+        for j in range(i + 1, len(ready)):
+            a, b = ready[i], ready[j]
+            shared = sorted(
+                set(a.get("sensitive_files") or []) & set(b.get("sensitive_files") or [])
+            )
+            if not shared:
+                continue
+            a_id, b_id = a["story_id"], b["story_id"]
+            if _dep_reaches(a_id, b_id) or _dep_reaches(b_id, a_id):
+                continue  # already serialized by a (direct or transitive) dep edge
+            warnings.append(
+                f"{a_id} and {b_id} both touch {', '.join(shared)} and declare no dep "
+                f"between them — filing parallel may open colliding PRs. Consider "
+                f"`deps: [{a_id}]` on {b_id} (predecessor-first) so each rebases on "
+                "the prior's merge."
+            )
+
     if errors:
         for e in errors:
             print(f"FAIL: {e}", file=sys.stderr)
+        for w in warnings:
+            print(f"WARN: {w}", file=sys.stderr)
         print(f"\nstories validate: {len(errors)} error(s)", file=sys.stderr)
         return 1
-    print(f"stories validate: {len(stories)} stories, schema + graph clean")
+    for w in warnings:
+        print(f"WARN: {w}", file=sys.stderr)
+    suffix = f"; {len(warnings)} co-location warning(s)" if warnings else ""
+    print(f"stories validate: {len(stories)} stories, schema + graph clean{suffix}")
     return 0
 
 
