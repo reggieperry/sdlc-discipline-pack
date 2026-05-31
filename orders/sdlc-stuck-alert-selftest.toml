@@ -1,0 +1,5 @@
+[order]
+description = "Daily detector canary for the Brooklyn stall alert (pack #212). Runs sdlc-stuck-alert.sh --self-test: the real detection logic against a synthetic stranded-bead set (one per trigger). If the detector has gone blind — a bd schema drift or a logic regression that makes it stop flagging — the synthetic beads stop matching and this fails loud (notifies the operator that the alerter itself is broken, exits non-zero). This guards the failure mode a send-only self-test would miss: a green alerter that silently detects nothing. Respects the same SDLC_STUCK_ALERT_ENABLED gate (a disabled feature runs no canary)."
+trigger = "cooldown"
+interval = "24h"
+exec = "$PACK_DIR/assets/scripts/sdlc-stuck-alert.sh --self-test"
