@@ -165,24 +165,31 @@ After each round, re-run pytest and the gate. If both pass (verdict in `pass`/`a
 
 ## Bounce to worker (red after three rounds, or unresolvable)
 
+Record the failure metadata, then hand the route-or-park decision to the re-derivation guard (pack #197 Part 2). If the gate just re-derived the **same** `gate.blocks` as the previous cycle, the worker already failed to change the gate result — bouncing again only re-spawns into the identical dead-end (Elder EL-173: three spawns into the same `D.asserts` block). The guard writes `gate.blocks`, then either routes to the worker (blocks changed, or first derivation) or **parks** the bead (`requires_human_decision=true`, `status=blocked`, routing cleared, witness mailed), which the #197 kickoff guard then refuses to re-arm.
+
+Do **not** write `gate.blocks` in the metadata update below — the guard owns that field, because it must read the *prior* value before overwriting it.
+
 ```bash
 RIG="${GC_RIG:-unknown}"
 WORKER_TARGET="$RIG/sdlc-discipline.worker"
+WITNESS_TARGET="$RIG/witness"
 bd update $STORY_ID \
   --set-metadata test_status="red" \
   --set-metadata test_summary="$TEST_SUMMARY" \
   --set-metadata gate.verdict="$GATE_VERDICT" \
-  --set-metadata gate.blocks="$GATE_BLOCKS" \
   --set-metadata test_failure_category="<pytest|gate>" \
   --set-metadata test_failure_summary="<one-line>" \
   --set-metadata test_resolution_attempts="<n>" \
   --set-metadata "tester.completed_at=$(date -Iseconds)"
-bd update $STORY_ID --status=open --assignee "" --set-metadata gc.routed_to="$WORKER_TARGET"
+# Route-or-park: the guard writes gate.blocks (after comparing to the prior
+# cycle) and either routes to the worker or parks on identical re-derivation.
+GATE_BLOCKS="$GATE_BLOCKS" python3 .claude/sdlc-discipline/sdlc-rederivation-guard.py \
+  "$STORY_ID" "$WORKER_TARGET" "$WITNESS_TARGET"
 gc runtime drain-ack
 exit
 ```
 
-The worker pool sees a bead with `test_status=red`, `gate.blocks` (structured), and `test_failure_summary`. A fresh worker resumes the existing branch and addresses each block.
+The worker pool sees a bead with `test_status=red`, `gate.blocks` (structured), and `test_failure_summary`, and a fresh worker resumes the existing branch to address each block — unless the guard parked the bead, in which case it stays `blocked` until the operator resolves it (`sdlc-human-decision.sh resolve …`) rather than re-spawning into the same failure.
 
 ## Escalation
 
