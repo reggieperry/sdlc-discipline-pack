@@ -197,6 +197,10 @@ The base branch comes from `metadata.target` on the bead, or the rig's
 default branch if `target` is not set.
 
 ```bash
+# pack #223: RIG_ROOT must be assigned from the supervisor's GC_RIG_ROOT; without
+# it the `cd "$RIG_ROOT"` and `git -C "$RIG_ROOT"` below silently target "" (the
+# fresh-story path never set it). `:?` fails loud rather than running against "".
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set by the supervisor for workspace-setup}"
 TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // empty')
 if [ -z "$TARGET" ]; then
     TARGET=$(git -C "$RIG_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
@@ -207,6 +211,7 @@ fi
 **1. Fetch latest:**
 
 ```bash
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign in each block (separate bash invocations don't share env)
 cd "$RIG_ROOT"
 git fetch --prune origin
 ```
@@ -217,9 +222,11 @@ Worktrees are scoped to the bead, not the worker instance, so a different
 worker can pick up this bead after a restart and find the same workspace.
 
 ```bash
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign in each block (separate bash invocations don't share env)
 WORKTREE=$(bd show {{story_id}} --json | jq -r '.[0].metadata.work_dir // empty')
 if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-    cd "$WORKTREE"
+    WORKTREE_PATH="$WORKTREE"   # pack #223: bind on BOTH branches so later $WORKTREE_PATH refs are never empty
+    cd "$WORKTREE_PATH"
 else
     WORKTREE_PATH="$RIG_ROOT/.gc/worktrees/$(bd show {{story_id}} --json | jq -r '.[0].metadata.rig // "rig"')/sdlc/{{story_id}}"
     mkdir -p "$(dirname "$WORKTREE_PATH")"
@@ -319,6 +326,7 @@ so concurrent stories sharing the same merge-base share the cache.
 ```bash
 TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"')
 BASELINE_SHA=$(git merge-base HEAD "origin/$TARGET")
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign before use (see workspace-setup)
 RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
 CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 ```
@@ -558,6 +566,7 @@ is not.
 
 ```bash
 BASELINE_SHA=$(bd show {{story_id}} --json | jq -r '.[0].metadata."gate.baseline_sha"')
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign before use (see workspace-setup)
 RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
 CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 
