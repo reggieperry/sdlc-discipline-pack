@@ -91,9 +91,13 @@ cd "$WORKTREE"
 Step 1 — fetch and check out the branch:
 
 ```bash
-git fetch origin
-git checkout "$BRANCH"
-git reset --hard "origin/$BRANCH"   # discard any stale local state
+# Target the worktree explicitly with `git -C "$WORKTREE"` — never rely on the
+# ambient cwd. If the `cd "$WORKTREE"` above did not take effect, a bare
+# `git checkout`/`reset` here switches the RIG ROOT's HEAD to the feature branch
+# and resets it (pack #223 — the rebase-path rig-root hijack).
+git -C "$WORKTREE" fetch origin
+git -C "$WORKTREE" checkout "$BRANCH"
+git -C "$WORKTREE" reset --hard "origin/$BRANCH"   # discard any stale local state
 ```
 
 Step 2 — capture pre-rebase signals, then attempt the rebase. The signals snapshot is what the post-rebase gate compares against, so it must be captured before HEAD is rewritten.

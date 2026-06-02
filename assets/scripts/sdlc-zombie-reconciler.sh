@@ -339,6 +339,15 @@ PYEOF
         branch=$(git -C "$rig_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
         if [ "$branch" != "main" ]; then
             echo "zombie-reconciler: rig=$rig on branch '$branch' (not main); leaving $archived archive move(s) uncommitted for the operator" >&2
+            # pack #223: notify loudly rather than only logging to stderr — a rig
+            # root left off the default branch breaks `git pull` and silently
+            # strands archives until the operator restores it to the default branch.
+            if [ -x "$NOTIFY" ]; then
+                "$NOTIFY" \
+                    --subject "[zombie-reconciler] rig=$rig is off the default branch" \
+                    --body "The rig $rig checkout is on '$branch' (not the default branch), so $archived archive move(s) were left uncommitted. A pull/reconcile will fail until the rig root is restored to the default branch (e.g. git checkout main). See pack #223." \
+                    2>/dev/null || true
+            fi
         else
             local sid
             for sid in "${archived_ids[@]}"; do
