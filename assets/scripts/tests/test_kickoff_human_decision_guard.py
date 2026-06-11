@@ -45,7 +45,11 @@ BEAD = "el-test001"
 # name. We deliberately do NOT set GC_RIG — it only overrides the rig name,
 # not the directory discovery that sets DIR for the snapshot step.
 RIG = "rig"
-WORKER_TARGET = f"{RIG}/sdlc-discipline.worker"
+# Pack #226: the chain entry point is the planner pool. The kickoff routes
+# story beads to the planner, which writes and commits the plan before
+# handing the bead to the (implement-only) worker pool.
+PLANNER_TARGET = f"{RIG}/sdlc-discipline.planner"
+SIX_PHASE_CHAIN = "planner → worker → tester → reviewer → documenter → finalizer"
 
 
 def _write_exec(path: Path, body: str) -> None:
@@ -105,8 +109,10 @@ class KickoffHumanDecisionGuard(unittest.TestCase):
         return log.read_text().splitlines() if log.exists() else []
 
     def _routed(self) -> bool:
-        """True if any bd update set gc.routed_to to the worker target."""
-        return any("update" in c and f"gc.routed_to={WORKER_TARGET}" in c for c in self._bd_calls())
+        """True if any bd update set gc.routed_to to the planner target."""
+        return any(
+            "update" in c and f"gc.routed_to={PLANNER_TARGET}" in c for c in self._bd_calls()
+        )
 
     def test_refuses_to_route_when_flag_true(self) -> None:
         """requires_human_decision=true → no re-route, exit 0, refusal logged."""
@@ -120,13 +126,17 @@ class KickoffHumanDecisionGuard(unittest.TestCase):
         self.assertIn("requires_human_decision", (result.stdout + result.stderr))
 
     def test_routes_normally_when_flag_absent(self) -> None:
-        """No flag → normal routing to the worker pool."""
+        """No flag → normal routing to the planner pool (chain entry, pack #226)."""
         _make_bd_fake(self._tmp, {})
         result = _run_kickoff(self._rig, self._tmp)
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertTrue(
             self._routed(),
-            msg=f"kickoff did not route an unflagged bead; bd calls: {self._bd_calls()}",
+            msg=f"kickoff did not route an unflagged bead to the planner; bd calls: {self._bd_calls()}",
+        )
+        self.assertTrue(
+            any("append-notes" in c and SIX_PHASE_CHAIN in c for c in self._bd_calls()),
+            msg=f"kickoff notes do not name the six-phase chain; bd calls: {self._bd_calls()}",
         )
 
     def test_routes_when_flag_resolved(self) -> None:
