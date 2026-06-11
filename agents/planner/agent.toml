@@ -1,0 +1,11 @@
+scope = "rig"
+provider = "claude"
+prompt_template = "agents/planner/prompt.template.md"
+wake_mode = "fresh"
+work_dir = ".gc/worktrees/{{.Rig}}/sdlc/{{.AgentBase}}"
+nudge = "Run gc hook; check assigned work and routed pool work, then follow mol-sdlc-plan."
+pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}}"]
+idle_timeout = "1h"
+min_active_sessions = 0
+max_active_sessions = 2
+# No option_defaults model pin (status quo: inherit) — per-phase pins are the A/B lever, set at experiment time.
