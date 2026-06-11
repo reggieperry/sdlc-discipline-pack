@@ -1051,8 +1051,8 @@ def main() -> int:
         description=(
             "SDLC story-graph bridge: stories/*.md <-> bd beads.\n\n"
             "Story lifecycle:\n"
-            "  draft → ready → filed → (chain runs: worker → tester → reviewer\n"
-            "                            → documenter → finalizer)\n"
+            "  draft → ready → filed → (chain runs: planner → worker → tester\n"
+            "                            → reviewer → documenter → finalizer)\n"
             "                       → closed via `stories.py archive <id>`\n\n"
             "Status values come from VALID_STATUSES = {draft, ready, filed,\n"
             "in-flight, merged, closed}. `closed` is the terminal — set by\n"

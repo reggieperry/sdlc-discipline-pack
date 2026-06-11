@@ -208,7 +208,11 @@ counters = {
 
 for b in beads:
     bead_id = b.get("id")
-    assignee = b.get("assignee") or b.get("metadata", {}).get("worker", {}).get("session_id")
+    assignee = (
+        b.get("assignee")
+        or b.get("metadata", {}).get("worker", {}).get("session_id")
+        or b.get("metadata", {}).get("planner", {}).get("session_id")
+    )
     if not bead_id or not assignee:
         continue
     counters["with_assignee"] += 1

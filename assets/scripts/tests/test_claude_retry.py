@@ -237,12 +237,18 @@ class HandoffTests(unittest.TestCase):
     def test_step_inside_template_phase_is_not_complete(self) -> None:
         """A step still in the template's own list means mid-work."""
         self.assertFalse(cr.handoff_complete("implement", "worker"))
-        self.assertFalse(cr.handoff_complete("plan", "worker"))
+        self.assertFalse(cr.handoff_complete("workspace-resume", "worker"))
+        self.assertFalse(cr.handoff_complete("plan", "planner"))
+        self.assertFalse(cr.handoff_complete("workspace-setup", "planner"))
 
     def test_step_outside_template_phase_is_complete(self) -> None:
-        """A step belonging to the next pool means handoff advanced."""
+        """A step belonging to another pool means handoff advanced."""
         self.assertTrue(cr.handoff_complete("read-diff", "worker"))  # reviewer's first step
         self.assertTrue(cr.handoff_complete("run-tests", "worker"))  # tester step
+        # pack #226: a worker bead at `plan` was bounced back to the planner
+        # (implement_blocked=plan_missing) — outside the worker's authority.
+        self.assertTrue(cr.handoff_complete("plan", "worker"))
+        self.assertTrue(cr.handoff_complete("implement", "planner"))  # planner → worker handoff
 
     def test_empty_step_is_not_complete(self) -> None:
         """An unset step (worker never started) is NOT a handoff."""
@@ -253,6 +259,7 @@ class HandoffTests(unittest.TestCase):
             cr.handoff_complete("anything", "no-such-template")
 
     def test_expected_terminal_step_returns_last(self) -> None:
+        self.assertEqual(cr.expected_terminal_step("planner"), "submit-plan")
         self.assertEqual(cr.expected_terminal_step("worker"), "submit-and-exit")
         self.assertEqual(cr.expected_terminal_step("tester"), "submit-and-exit")
 

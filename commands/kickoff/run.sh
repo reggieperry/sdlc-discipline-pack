@@ -88,20 +88,22 @@ if [ "$HUMAN_DECISION" = "true" ]; then
     exit 0
 fi
 
-WORKER_TARGET="$RIG/$PACK.worker"
+# Pack #226: the chain entry point is the planner pool — it writes and
+# commits the plan, then routes to the (implement-only) worker pool.
+PLANNER_TARGET="$RIG/$PACK.planner"
 NOW=$(date -Iseconds)
 
-echo "sdlc-kickoff: routing $STORY_ID to $WORKER_TARGET"
+echo "sdlc-kickoff: routing $STORY_ID to $PLANNER_TARGET"
 
 bd update "$STORY_ID" \
     --status=open \
-    --set-metadata gc.routed_to="$WORKER_TARGET" \
+    --set-metadata gc.routed_to="$PLANNER_TARGET" \
     --set-metadata sdlc_run_started="$NOW" \
     --set-metadata kickoff_mode="non_llm" \
     >/dev/null
 
 bd update "$STORY_ID" \
-    --append-notes "SDLC kickoff at $NOW: worker → tester → reviewer → documenter → finalizer. Kickoff via sdlc-kickoff.sh (no LLM)." \
+    --append-notes "SDLC kickoff at $NOW: planner → worker → tester → reviewer → documenter → finalizer. Kickoff via sdlc-kickoff.sh (no LLM)." \
     >/dev/null
 
 # Operator-memory snapshot (pack #45). Writes the operator's Claude Code
@@ -118,6 +120,6 @@ if [ -f "$SNAPSHOT_PY" ]; then
     bd update "$STORY_ID" --set-metadata operator_context_path="$OPERATOR_CONTEXT" >/dev/null
 fi
 
-echo "sdlc-kickoff: done. Pool reconciler will spawn a worker on its next tick."
+echo "sdlc-kickoff: done. Pool reconciler will spawn a planner on its next tick."
 echo "  Watch progress:  sh $SCRIPT_DIR/assets/scripts/sdlc-watch.sh $STORY_ID"
 echo "  Bead state:      bd show $STORY_ID --json | jq '.[0].metadata'"

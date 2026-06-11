@@ -93,10 +93,21 @@ class Action(str, Enum):
 # bead. When `current_step` leaves this list (advances to the next
 # template's first step) the handoff is complete.
 PHASE_ORDER: dict[str, list[str]] = {
+    # Pack #226: the planner pool owns workspace creation + the plan; the
+    # worker resumes the planner's branch and implements against the
+    # committed plan. A worker-template bead at `plan` means it bounced
+    # back to the planner (implement_blocked=plan_missing) — out of the
+    # worker's authority, so it correctly reads as a handoff.
+    "planner": [
+        "load-context",
+        "workspace-setup",
+        "plan",
+        "submit-plan",
+    ],
     "worker": [
         "load-context",
-        "plan",
-        "workspace-setup",
+        "workspace-resume",
+        "capture-baseline",
         "implement",
         "self-audit",
         "submit-and-exit",
