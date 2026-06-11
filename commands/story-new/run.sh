@@ -9,8 +9,8 @@
 # correct rig's beads database).
 #
 # Story lifecycle (canonical):
-#   draft → ready → filed → (chain runs: worker → tester → reviewer
-#                              → documenter → finalizer)
+#   draft → ready → filed → (chain runs: planner → worker → tester
+#                              → reviewer → documenter → finalizer)
 #                          → closed via `stories.py archive <id>`
 #
 # This script creates a bead DIRECTLY (one-off interactive flow); the bead's

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""sdlc-cost-by-step.py — decompose a worker session's cost by formula step.
+"""sdlc-cost-by-step.py — decompose a chain session's cost by formula step.
 
-The pack's mol-sdlc-work formula walks six steps in one worker session:
-load-context, plan, workspace-setup, implement, self-audit, submit-and-exit.
-Each transition is marked by a `bd update --set-metadata current_step=X`
-call in the worker's session JSONL. This helper bins token usage by step
-window so cost can be attributed to the specific step that incurred it.
+The pack's mol-sdlc-plan formula walks four steps in one planner session
+(load-context, workspace-setup, plan, submit-plan); mol-sdlc-work walks
+six steps in one worker session (load-context, workspace-resume,
+capture-baseline, implement, self-audit, submit-and-exit). Each transition
+is marked by a `bd update --set-metadata current_step=X` call in the
+session's JSONL. This helper bins token usage by step window so cost can
+be attributed to the specific step that incurred it.
 
 Used by VAL-005 to answer "what fraction of worker cost is planning vs.
 implementation?" — the question that distinguishes "Sonnet worker fails

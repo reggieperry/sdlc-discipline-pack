@@ -1,6 +1,6 @@
 # sdlc-discipline pack
 
-A Gas City pack that runs an SDLC chain — plan, build, test, review, document, finalize — against any rig with a Click/pytest/Python project shape. Five pool agents, zero named sessions, parallel-by-default. Concurrency is bounded by host CPU/RAM and per-account API rate limits, not by named-session serialization.
+A Gas City pack that runs an SDLC chain — plan, build, test, review, document, finalize — against any rig with a Click/pytest/Python project shape. Six pool agents, zero named sessions, parallel-by-default. Concurrency is bounded by host CPU/RAM and per-account API rate limits, not by named-session serialization.
 
 ## Contents
 
@@ -39,23 +39,25 @@ Neither layer eliminates the human engineer; together they relocate the engineer
 
 ## Architecture (v2.0)
 
-The chain has five LLM pools and zero named sessions. A story bead enters at the worker pool and exits closed after the finalizer.
+The chain has six LLM pools and zero named sessions. A story bead enters at the planner pool and exits closed after the finalizer. The planner/worker split (pack #226) makes the plan and implement phases independently model-pinnable.
 
 ```text
 kickoff (one-shot)
-  └─→ worker pool (max=5)        plan + build + self-audit
-        └─→ tester pool (max=3)  pytest + ruff + mypy + 3-round resolution
-              ├─[red after 3] back to worker pool
-              └─[green]
-                   └─→ reviewer pool (max=3)    plan-coverage audit + rule self-audits
-                         ├─[blocker] back to worker pool
-                         └─[pass]
-                              └─→ documenter pool (max=2)  feature doc + push
-                                    └─→ finalizer pool (max=2)  PR refresh + auto-merge gate
-                                          └─→ closed
+  └─→ planner pool (max=2)       workspace + plan, committed to the branch
+        └─→ worker pool (max=5)  build + self-audit against the committed plan
+              ├─[plan missing] back to planner pool (once)
+              └─→ tester pool (max=3)  pytest + ruff + mypy + 3-round resolution
+                    ├─[red after 3] back to worker pool
+                    └─[green]
+                         └─→ reviewer pool (max=3)    plan-coverage audit + rule self-audits
+                               ├─[blocker] back to worker pool
+                               └─[pass]
+                                    └─→ documenter pool (max=2)  feature doc + push
+                                          └─→ finalizer pool (max=2)  PR refresh + auto-merge gate
+                                                └─→ closed
 ```
 
-Total max concurrent sessions per rig: 15. Bead handoffs use `metadata.gc.routed_to` only — never `--assignee` — because the supervisor's default scale-check filters `--unassigned`. The pack's `comparison/v2.0a-stall-record.json` records the regression that motivated this convention.
+Total max concurrent sessions per rig: 17. Bead handoffs use `metadata.gc.routed_to` only — never `--assignee` — because the supervisor's default scale-check filters `--unassigned`. The pack's `comparison/v2.0a-stall-record.json` records the regression that motivated this convention.
 
 ## Authoring stories
 
@@ -141,6 +143,7 @@ A spec passing this rubric typically produces a clean glance-merge chain. A spec
 sdlc-discipline/
 ├── pack.toml                          schema 2; zero [[named_session]] declarations
 ├── agents/                            convention-discovered agent definitions
+│   ├── planner/
 │   ├── worker/
 │   ├── tester/
 │   ├── reviewer/
@@ -149,8 +152,9 @@ sdlc-discipline/
 │       ├── agent.toml                 pool config (pre_start, max_active_sessions, idle_timeout)
 │       └── prompt.template.md         the agent's persistent identity
 ├── formulas/                          *.toml formula definitions
-│   ├── mol-sdlc.toml                  kickoff (routes story to worker pool)
-│   └── mol-sdlc-work.toml             worker walks load → plan → workspace → implement → self-audit → submit
+│   ├── mol-sdlc.toml                  kickoff (routes story to planner pool)
+│   ├── mol-sdlc-plan.toml             planner walks load → workspace → plan → submit-plan
+│   └── mol-sdlc-work.toml             worker walks load → workspace-resume → baseline → implement → self-audit → submit
 ├── orders/                            *.toml event/scheduled tasks
 │   └── sdlc-cost-rollup.toml          observer order on bead.closed → cost_history.csv
 ├── commands/                          operator-facing CLIs (commands/<id>/run.sh)
@@ -165,7 +169,7 @@ sdlc-discipline/
 │       └── settings.json              portable hooks + permissions
 ├── assets/                            opaque pack-owned files (NOT convention-discovered)
 │   ├── scripts/
-│   │   ├── worktree-setup.sh          pre_start hook for all five pools
+│   │   ├── worktree-setup.sh          pre_start hook for all six pools
 │   │   ├── sdlc-cost-rollup.sh        invoked by orders/sdlc-cost-rollup.toml
 │   │   └── sdlc-glance-rubric.sh      invoked by agents/finalizer/prompt.template.md
 │   ├── docs/                          principal-engineer guides (DDD, GOOS, modularity, refactoring)
@@ -176,7 +180,7 @@ sdlc-discipline/
 
 The pack uses Gas City's `overlay/` mechanism to inject `.claude/rules/*.md` and `.claude/settings.json` into each chain agent's working directory at session-spawn time. The discipline rules live in **one place**: `overlay/per-provider/claude/.claude/rules/`. Rigs do not need to track their own copies; they consume the pack's rules via overlay. Rigs that *want* to override a specific rule can ship a same-named file in their own `.claude/rules/` — the workspace-setup propagation step preserves rig-tracked files (rig wins on filename collision). See *How rules reach the agent* below.
 
-The non-worker pools (tester, reviewer, documenter, finalizer) drive single-conversation workflows from their prompt templates. Only the worker walks a multi-step formula because its work has structurally distinct phases inside one session.
+The downstream pools (tester, reviewer, documenter, finalizer) drive single-conversation workflows from their prompt templates. Only the planner and the worker walk multi-step formulas (`mol-sdlc-plan`, `mol-sdlc-work`) because their work has structurally distinct phases inside one session.
 
 ## Prerequisites and installation
 
@@ -279,7 +283,7 @@ gc reload
 gc config explain | grep -E '^Agent:.*sdlc-discipline'
 ```
 
-The reload picks up the new import. `gc config explain` should list five agents under the rig — worker, tester, reviewer, documenter, and finalizer — each pointing at the pack's prompt templates and configured with the per-pool `max_active_sessions` ceilings (5/3/3/2/2).
+The reload picks up the new import. `gc config explain` should list six agents under the rig — planner, worker, tester, reviewer, documenter, and finalizer — each pointing at the pack's prompt templates and configured with the per-pool `max_active_sessions` ceilings (2/5/3/3/2/2).
 
 ### 7. Start the supervisor (first time)
 
@@ -346,8 +350,8 @@ Stories complement the existing `commands/story-new/` (interactive single-story 
 ### Story lifecycle (canonical)
 
 ```
-draft → ready → filed → (chain runs: worker → tester → reviewer
-                          → documenter → finalizer)
+draft → ready → filed → (chain runs: planner → worker → tester
+                          → reviewer → documenter → finalizer)
                      → closed via `stories.py archive <id>`
 ```
 
@@ -685,7 +689,7 @@ cd <rig>
 bash commands/kickoff/run.sh <bead_id>
 ```
 
-The script sets `gc.routed_to=<rig>/sdlc-discipline.worker` on the story bead, stamps `sdlc_run_started`, leaves a kickoff note, and exits. The supervisor's pool reconciler spawns a fresh worker on its next tick and the chain proceeds.
+The script sets `gc.routed_to=<rig>/sdlc-discipline.planner` on the story bead, stamps `sdlc_run_started`, leaves a kickoff note, and exits. The supervisor's pool reconciler spawns a fresh planner on its next tick and the chain proceeds.
 
 **Alternative: the formula-driven kickoff.** Spawns a fresh Claude Code session that runs the same four `bd` commands inside `mol-sdlc.toml`'s kickoff step. Higher latency (~60–120s) and material RAM pressure under concurrent loads (each kickoff is ~350 MB), but creates a wisp molecule bead in the bead store for graph-tracking purposes.
 
@@ -693,7 +697,7 @@ The script sets `gc.routed_to=<rig>/sdlc-discipline.worker` on the story bead, s
 gc sling <rig>/<provider> mol-sdlc --formula --var story_id=<bead_id>
 ```
 
-Once the bead is routed, both paths converge: the worker's pool reconciler spawns a fresh worker, which walks the six-step `mol-sdlc-work` formula (load-context, plan, workspace-setup, implement, self-audit, submit-and-exit) and routes the bead to the tester pool. Each subsequent pool runs a single-conversation handoff and routes onward via `gc.routed_to` — never `--assignee`.
+Once the bead is routed, both paths converge: the pool reconciler spawns a fresh planner, which walks the four-step `mol-sdlc-plan` formula (load-context, workspace-setup, plan, submit-plan), commits the plan to the feature branch, and routes the bead to the worker pool. A fresh worker then walks the six-step `mol-sdlc-work` formula (load-context, workspace-resume, capture-baseline, implement, self-audit, submit-and-exit) against the committed plan and routes the bead to the tester pool. Each subsequent pool runs a single-conversation handoff and routes onward via `gc.routed_to` — never `--assignee`.
 
 ## Watching the chain
 

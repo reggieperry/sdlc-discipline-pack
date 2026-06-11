@@ -20,6 +20,10 @@ _PACK_ROOT = Path(__file__).resolve().parents[3]
 _WORKER_TEMPLATE = _PACK_ROOT / "agents" / "worker" / "prompt.template.md"
 _RECONCILER = _PACK_ROOT / "assets" / "scripts" / "sdlc-zombie-reconciler.sh"
 _MOL_WORK = _PACK_ROOT / "formulas" / "mol-sdlc-work.toml"
+# Pack #226 moved workspace-setup (and its #223 WORKTREE_PATH binding) into
+# the planner formula; the worker formula's workspace-resume keeps the
+# RIG_ROOT guard.
+_MOL_PLAN = _PACK_ROOT / "formulas" / "mol-sdlc-plan.toml"
 
 
 class WorkerRebaseCheckoutTests(unittest.TestCase):
@@ -55,14 +59,15 @@ class ReconcilerOffMainNotifyTests(unittest.TestCase):
 
 
 class MolWorkRigRootBindingTests(unittest.TestCase):
-    """workspace-setup assigns RIG_ROOT and binds WORKTREE_PATH on both branches."""
+    """The formulas assign RIG_ROOT; the planner's workspace-setup binds WORKTREE_PATH on both branches."""
 
     def test_rig_root_is_assigned_from_gc_rig_root(self) -> None:
-        text = _MOL_WORK.read_text(encoding="utf-8")
-        self.assertRegex(text, r'RIG_ROOT="\$\{GC_RIG_ROOT')
+        for formula in (_MOL_WORK, _MOL_PLAN):
+            text = formula.read_text(encoding="utf-8")
+            self.assertRegex(text, r'RIG_ROOT="\$\{GC_RIG_ROOT')
 
     def test_worktree_path_bound_on_existing_worktree_branch(self) -> None:
-        text = _MOL_WORK.read_text(encoding="utf-8")
+        text = _MOL_PLAN.read_text(encoding="utf-8")
         self.assertIn('WORKTREE_PATH="$WORKTREE"', text)
 
 

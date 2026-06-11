@@ -94,7 +94,7 @@ MAX_RETRIES = int(os.environ["MAX_RETRIES"])
 RIG_NAME = os.environ["RIG_NAME"]
 RIG_ROOT = os.environ["RIG_ROOT"]
 
-TEMPLATES = ("worker", "tester", "reviewer", "documenter", "finalizer")
+TEMPLATES = ("planner", "worker", "tester", "reviewer", "documenter", "finalizer")
 
 NOW = dt.datetime.now(dt.timezone.utc)
 THRESHOLD = NOW - dt.timedelta(minutes=BACKOFF_MINUTES)

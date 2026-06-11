@@ -59,12 +59,18 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_SLOS_MINUTES = {
+    # Planner-session steps (mol-sdlc-plan, pack #226).
     "load-context": 5,
-    "plan": 30,
     "workspace-setup": 5,
+    "plan": 30,
+    "submit-plan": 10,
+    # Worker-session steps (mol-sdlc-work).
+    "workspace-resume": 5,
+    "capture-baseline": 15,
     "implement": 120,
     "self-audit": 10,
     "submit-and-exit": 10,
+    # Downstream single-conversation pools.
     "tester": 15,
     "reviewer": 20,
     "documenter": 20,

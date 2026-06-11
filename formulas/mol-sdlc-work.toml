@@ -1,10 +1,12 @@
 formula = "mol-sdlc-work"
 description = """
-SDLC worker lifecycle — single-session, multi-step. The worker walks
-load-context, plan, workspace-setup, implement, self-audit, and
-submit in one conversation, then hands the bead off to a tester pool.
-No inter-session bead handoffs between the internal phases — they are
-formula steps inside the same session.
+SDLC worker lifecycle — single-session, multi-step. The implementation
+half of the SDLC chain (pack #226): the planner pool committed the plan;
+the worker resumes the planner's branch and implements against it. The
+worker walks load-context, workspace-resume, capture-baseline, implement,
+self-audit, and submit in one conversation, then hands the bead off to a
+tester pool. No inter-session bead handoffs between the internal phases —
+they are formula steps inside the same session.
 
 ## Worker contract (self-cleaning model)
 
@@ -14,8 +16,8 @@ formula steps inside the same session.
 4. You are GONE — the tester validates; the reviewer audits; the documenter
    writes docs; the finalizer merges.
 
-Work beads flow: pool → worker → tester → reviewer → documenter →
-finalizer → closed. Each transition between pools sets only
+Work beads flow: pool → planner → worker → tester → reviewer →
+documenter → finalizer → closed. Each transition between pools sets only
 `gc.routed_to` (never `--assignee`); the supervisor's default
 scale-check filters `--unassigned`.
 
@@ -25,11 +27,12 @@ scale-check filters `--unassigned`.
 |-----------|--------|
 | Bounced from tester (red tests) | Resume from existing branch; fix the failure_summary; re-submit. |
 | Bounced from reviewer (blocker) | Resume from existing branch; address rejection_reason; re-submit. |
+| Plan missing on the branch | `workspace-resume` bounces to the planner pool once (`implement_blocked=plan_missing`); a second miss escalates. |
 | Blocked on requirements | Mail witness; mark story `escalated`; drain-ack and exit. |
 | Context filling | `gc runtime request-restart`; the new session resumes from `metadata.current_step`. |
-| Sensitive file would change | Plan must declare it; submit step blocks if it changed without declaration. |
+| Sensitive file would change | The plan must declare it; submit step blocks if it changed without declaration. |
 """
-version = 2
+version = 3
 
 [vars.story_id]
 description = "ID of the story bead to drive through the SDLC chain"
@@ -70,7 +73,7 @@ bd update {{story_id}} \\
   --set-metadata "${PHASE}.session_id=${GC_SESSION_ID:-unknown}" \\
   --set-metadata "${PHASE}.started_at=$(date -Iseconds)" \\
   --set-metadata "rig=${RIG}" \\
-  --set-metadata "current_step=plan"
+  --set-metadata "current_step=workspace-resume"
 ```
 
 **Exit criteria:** You have read the bead's description and the rig's
@@ -80,236 +83,127 @@ the acceptance criteria from memory.
 
 
 [[steps]]
-id = "plan"
-title = "Write the plan to plans/{{story_id}}.md"
+id = "workspace-resume"
+title = "Resume the planner's per-bead worktree, branch, and committed plan"
 needs = ["load-context"]
 description = """
-Produce a written implementation plan that the build step (next) executes
-against. Plans are not optional — TDD discipline depends on a plan whose
-acceptance criteria the test suite can run.
+The planner pool (formula `mol-sdlc-plan`) already created the per-bead
+worktree and feature branch and committed `plans/{{story_id}}.md` to it.
+Resume that workspace — do not create a new branch and do not write a
+new plan. Every step is idempotent — safe to re-run after a crash or
+restart.
 
-Write the plan to `plans/{{story_id}}.md` (create the directory if needed).
-Use this exact structure:
-
-```markdown
-# Plan: <story title from the bead>
-
-## Outcome
-
-<One line, user-observable. Not "refactor X" — "users can do Y."
-
-## Acceptance criteria
-
-- [ ] <Each criterion is a check the test suite can run, not a vibe.>
-- [ ] <At least three criteria; each tied to a behavior.>
-- [ ] <Existing behavior preserved unless the story explicitly changes it.>
-
-## Scope
-
-**In:** <files or modules the plan touches>
-**Out:** <explicit exclusions; what this plan deliberately does NOT do>
-
-## Sensitive files
-
-<List paths from the rig's CLAUDE.md sensitive-files list that the plan
-would touch. If none: state "None.">
-
-## Steps
-
-Each step is one of two shapes. The build step executes them in order.
-
-- **`red-green-refactor`** — for behaviors with branching, edge cases,
-  or any non-trivial correctness question. Write a failing test that
-  names the behavior; run it; confirm it fails for the right reason;
-  implement the minimum code to pass; refactor under the green tests.
-- **`pin-after-implementation`** — for plumbing, variants of a
-  behavior already implemented in a prior step (e.g., a second
-  `--format` choice given a primary one), or a behavior an existing
-  library validates for free (e.g., Click choice validation rejecting
-  unknown values). Implement, then write a regression-pinning test.
-  Mark the commit `test(<area>): pin <behavior>` rather than
-  shadow-implementing a Red.
-
-Pin-after is for cases where a watched-failing Red would be theatre
-rather than design pressure. Use red-green-refactor when the test
-genuinely informs the implementation; use pin-after when the
-implementation is mechanical and the test is the safety net.
-
-1. `[red-green-refactor]` **<Behavior name>** — Red: write
-   `tests/test_<area>.py::test_<name>` asserting the Then clause
-   given the Given/When setup. Green: implement the minimum code.
-   Refactor: clean up; rerun.
-2. `[pin-after-implementation]` **<Behavior name>** — Implement
-   (mechanical), then add `test(<area>): pin <behavior>`.
-3. ...
-```
-
-## Discipline
-
-- **TDD first.** Each behavior gets a failing test before any production
-  code. The plan must name the test file path and the pytest function name.
-- **Bounded scope.** Don't plan beyond what the story declares. If the
-  story is a `--pretty` flag, don't add `--no-pretty`, `--indent`, or
-  schema validation under the same plan.
-- **Concrete acceptance criteria.** Each criterion is a check the test
-  suite can run. "Looks reasonable" or "is robust" are not criteria.
-- **No invented requirements.** The story is the contract. Don't add
-  criteria the story doesn't imply, even if you'd write them yourself.
-- **Sensitive files explicit.** If you would touch a sensitive file,
-  name it. The submit step will block silent edits.
-
-Record the plan path:
+**1. Fetch and read the handoff metadata:**
 
 ```bash
-bd update {{story_id}} \\
-  --set-metadata plan_file="plans/{{story_id}}.md" \\
-  --set-metadata current_step="workspace-setup"
-```
-
-If you cannot produce a plan (story is too vague, sensitive-file scope
-unclear), append a note explaining what's needed and escalate to witness:
-
-```bash
-bd update {{story_id}} --status=escalated --append-notes "cannot plan: <reason>"
-WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
-gc mail send "$WITNESS_TARGET" -s "ESCALATION: cannot plan {{story_id}} [HIGH]" -m "<details>"
-gc runtime drain-ack
-exit
-```
-
-**Exit criteria:** `plans/{{story_id}}.md` exists, follows the structure
-above, and contains at least three concrete acceptance criteria. The
-sensitive-files section is filled in (with "None." if applicable). The
-bead's `metadata.plan_file` and `metadata.current_step` are set.
-"""
-
-
-[[steps]]
-id = "workspace-setup"
-title = "Create the per-bead git worktree and feature branch"
-needs = ["plan"]
-description = """
-Set up an isolated git worktree scoped to this bead and a feature branch
-on which to commit your work. Every step is idempotent — safe to re-run
-after a crash or restart.
-
-The base branch comes from `metadata.target` on the bead, or the rig's
-default branch if `target` is not set.
-
-```bash
-# pack #223: RIG_ROOT must be assigned from the supervisor's GC_RIG_ROOT; without
-# it the `cd "$RIG_ROOT"` and `git -C "$RIG_ROOT"` below silently target "" (the
-# fresh-story path never set it). `:?` fails loud rather than running against "".
-RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set by the supervisor for workspace-setup}"
-TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // empty')
-if [ -z "$TARGET" ]; then
-    TARGET=$(git -C "$RIG_ROOT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
-    TARGET="${TARGET:-main}"
-fi
-```
-
-**1. Fetch latest:**
-
-```bash
-RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign in each block (separate bash invocations don't share env)
-cd "$RIG_ROOT"
-git fetch --prune origin
-```
-
-**2. Ensure the bead-scoped worktree exists.**
-
-Worktrees are scoped to the bead, not the worker instance, so a different
-worker can pick up this bead after a restart and find the same workspace.
-
-```bash
-RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign in each block (separate bash invocations don't share env)
-WORKTREE=$(bd show {{story_id}} --json | jq -r '.[0].metadata.work_dir // empty')
-if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-    WORKTREE_PATH="$WORKTREE"   # pack #223: bind on BOTH branches so later $WORKTREE_PATH refs are never empty
-    cd "$WORKTREE_PATH"
-else
-    WORKTREE_PATH="$RIG_ROOT/.gc/worktrees/$(bd show {{story_id}} --json | jq -r '.[0].metadata.rig // "rig"')/sdlc/{{story_id}}"
-    mkdir -p "$(dirname "$WORKTREE_PATH")"
-    git worktree add "$WORKTREE_PATH" --detach "origin/$TARGET"
-    cd "$WORKTREE_PATH"
-    bd update {{story_id}} --set-metadata work_dir="$WORKTREE_PATH"
-fi
-```
-
-**2a. Propagate the agent's overlay-materialized `.claude/` into this
-worktree.**
-
-Gas City's overlay mechanism materializes pack-shipped `overlay/per-provider/<provider>/.claude/` files into the agent's session-spawn working directory (`AGENT_WORK_DIR`). When this formula step creates a separate per-bead worktree and `cd`s into it, those overlay files do not automatically propagate — they live in the agent's pre-spawn work_dir, which is a sibling path. Without propagation, Claude Code's `.claude/rules/` auto-load fails to fire from the per-bead worktree on rigs that don't track their own `.claude/` content.
-
-The propagation is conditional: rig-tracked files (e.g., a rig that ships its own `.claude/rules/python.md`) are preserved; only files absent from the per-bead worktree are populated from the overlay. The rig wins on filename collision.
-
-```bash
-AGENT_WORK_DIR="${GC_WORK_DIR:-$(pwd)/..}"
-if [ -d "$AGENT_WORK_DIR/.claude" ] && [ "$AGENT_WORK_DIR/.claude" != "$WORKTREE_PATH/.claude" ]; then
-    while IFS= read -r src; do
-        rel=${src#"$AGENT_WORK_DIR/"}
-        dst="$WORKTREE_PATH/$rel"
-        [ -e "$dst" ] && continue
-        mkdir -p "$(dirname "$dst")"
-        cp "$src" "$dst"
-    done < <(find "$AGENT_WORK_DIR/.claude" -type f 2>/dev/null)
-fi
-```
-
-`GC_WORK_DIR` is set by Gas City's session spawner to the agent's pre-spawn work_dir. The fallback `$(pwd)/..` is approximately the parent of the per-bead worktree if `GC_WORK_DIR` is unset, which is best-effort and not strictly correct in all layouts. If propagation produces no files, Claude Code's auto-load still walks the rig's tree from the per-bead worktree path; rigs that track their own `.claude/rules/` (Elder pre-2.3) are unaffected by this block.
-
-**3. Ensure the feature branch exists.**
-
-```bash
+# pack #223: RIG_ROOT must be assigned from the supervisor's GC_RIG_ROOT;
+# `:?` fails loud rather than running git against "".
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set by the supervisor for workspace-resume}"
+git -C "$RIG_ROOT" fetch --prune origin
 BRANCH=$(bd show {{story_id}} --json | jq -r '.[0].metadata.branch // empty')
-if [ -z "$BRANCH" ]; then
-    BRANCH="feature/{{story_id}}"
-fi
-
-git fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
-if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-    # Branch exists on remote — track it (resumed work)
-    if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        git checkout "$BRANCH" && git merge --ff-only "origin/$BRANCH"
-    else
-        git checkout --track -b "$BRANCH" "origin/$BRANCH"
-    fi
-elif git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-    git checkout "$BRANCH"
-else
-    # Fresh branch off the freshly-fetched remote tip
-    git checkout -B "$BRANCH" "origin/$TARGET"
-fi
-bd update {{story_id}} --set-metadata branch="$BRANCH"
+WORKTREE=$(bd show {{story_id}} --json | jq -r '.[0].metadata.work_dir // empty')
+PLAN_FILE=$(bd show {{story_id}} --json | jq -r '.[0].metadata.plan_file // empty')
 ```
 
-**4. Project setup (stack-specific):**
+If `BRANCH` or `PLAN_FILE` is empty, the planner never completed its
+handoff — skip to the plan-missing bounce (sub-step 4) without touching
+the worktree.
+
+**2. Ensure the bead-scoped worktree exists; recreate it from the pushed
+branch if not.**
+
+Worktrees are scoped to the bead, not the agent instance, so this is
+normally the worktree the planner created. The recreation path mirrors
+the rebase-iteration recovery in the worker template: worktree add from
+`origin/$BRANCH`, re-record `work_dir`.
 
 ```bash
-# Python projects with uv (the pack's default assumption)
-[ -f pyproject.toml ] && uv sync --group dev 2>&1 | tail -3
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign in each block (separate bash invocations don't share env)
+if [ -z "$WORKTREE" ] || [ ! -d "$WORKTREE" ]; then
+    # Worktree missing — recreate from origin/$BRANCH and re-record metadata.
+    WORKTREE="$RIG_ROOT/.gc/worktrees/${GC_RIG}/sdlc/{{story_id}}"
+    mkdir -p "$(dirname "$WORKTREE")"
+    git -C "$RIG_ROOT" fetch origin "$BRANCH"
+    git -C "$RIG_ROOT" worktree add "$WORKTREE" "origin/$BRANCH"
+    bd update {{story_id}} --set-metadata work_dir="$WORKTREE"
+fi
+cd "$WORKTREE"
+# Target the worktree explicitly with `git -C "$WORKTREE"` — never rely on
+# the ambient cwd (pack #223 — a bare checkout can land on the rig root's
+# HEAD if the cd above did not take effect).
+git -C "$WORKTREE" checkout "$BRANCH"
 ```
 
-If the rig uses a different toolchain, the project's CLAUDE.md should say
-so; adapt the setup command accordingly.
+On the normal path the planner left `$BRANCH` checked out and the
+checkout is a no-op. On the recreation path the worktree starts detached
+at `origin/$BRANCH` and the checkout creates the local tracking branch.
 
-**5. Record the step:**
+**3. Verify the committed plan is on the branch:**
+
+```bash
+[ -n "$PLAN_FILE" ] && [ -f "plans/{{story_id}}.md" ] && echo "plan present"
+```
+
+If the plan is present, record the step and move on:
 
 ```bash
 bd update {{story_id}} --set-metadata current_step="capture-baseline"
 ```
 
-**Exit criteria:** Current working directory is inside the bead-scoped
-worktree. On a feature branch named in `metadata.branch`. Working tree
-clean. Dependencies installed. The bead has `metadata.work_dir` and
-`metadata.branch` set.
+**Exit criteria (happy path):** Current working directory is inside the
+bead-scoped worktree. On the feature branch named in `metadata.branch`.
+Working tree clean. `plans/{{story_id}}.md` present on the branch. The
+bead's `current_step` is `capture-baseline`.
+
+**4. The plan-missing bounce (ONE bounce, then escalate).**
+
+Only reached when `metadata.plan_file` is missing, `metadata.branch` is
+missing, or `plans/{{story_id}}.md` is absent from the branch. First
+check whether the one-bounce budget is already spent:
+
+```bash
+IMPLEMENT_BLOCKED=$(bd show {{story_id}} --json | jq -r '.[0].metadata.implement_blocked // empty')
+```
+
+If `IMPLEMENT_BLOCKED` is already set, a previous worker session already
+bounced this bead to the planner and the plan is still missing — do NOT
+bounce again. Park it for a human instead:
+
+```bash
+REASON="plan still missing after a planner bounce (implement_blocked was already set)"
+bd update {{story_id}} \\
+  --set-metadata requires_human_decision=true \\
+  --set-metadata "human_decision_reason=$REASON" \\
+  --set-metadata "gc.routed_to=" \\
+  --status=escalated --append-notes "workspace-resume blocked: $REASON"
+WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
+gc mail send "$WITNESS_TARGET" -s "ESCALATION: {{story_id}} — plan missing after planner bounce [HIGH]" \\
+  -m "workspace-resume found no committed plan for {{story_id}} after a prior plan_missing bounce. Branch: ${BRANCH:-unset}. Human decision needed."
+gc runtime drain-ack
+exit
+```
+
+Otherwise spend the one bounce — route the bead back to the planner pool
+so it can author and commit the missing plan:
+
+```bash
+RIG="${GC_RIG:-unknown}"
+bd update {{story_id}} \\
+  --status=open --assignee "" \\
+  --set-metadata implement_blocked=plan_missing \\
+  --set-metadata current_step="plan" \\
+  --set-metadata gc.routed_to="$RIG/sdlc-discipline.planner" \\
+  --append-notes "workspace-resume: no committed plan found; bounced to planner (implement_blocked=plan_missing)"
+gc runtime drain-ack
+exit
+```
 """
 
 
 [[steps]]
 id = "capture-baseline"
 title = "Snapshot the target branch's static-analysis baseline"
-needs = ["workspace-setup"]
+needs = ["workspace-resume"]
 description = """
 Capture ruff, mypy, suppression, and pytest-weakening counts for the
 merge-base SHA against `metadata.target`. The tester reads this baseline
@@ -326,7 +220,7 @@ so concurrent stories sharing the same merge-base share the cache.
 ```bash
 TARGET=$(bd show {{story_id}} --json | jq -r '.[0].metadata.target // "main"')
 BASELINE_SHA=$(git merge-base HEAD "origin/$TARGET")
-RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign before use (see workspace-setup)
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign before use (see workspace-resume)
 RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
 CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 ```
@@ -363,8 +257,8 @@ git worktree remove --force "$SCRATCH" >/dev/null
 ```
 
 Note: `.claude/sdlc-discipline/sdlc-gate.py` is materialized into every
-worktree by the workspace-setup step's overlay propagation (formula step
-`workspace-setup`, sub-step 2a). The scratch worktree at the baseline
+worktree by the planner's workspace-setup overlay propagation (formula
+`mol-sdlc-plan`, step `workspace-setup`, sub-step 2a). The scratch worktree at the baseline
 SHA also receives this propagation when its parent `.claude/` is
 populated; if the rig's baseline SHA pre-dates the overlay, the script
 won't be there. Recover by copying it explicitly from this worktree:
@@ -566,7 +460,7 @@ is not.
 
 ```bash
 BASELINE_SHA=$(bd show {{story_id}} --json | jq -r '.[0].metadata."gate.baseline_sha"')
-RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign before use (see workspace-setup)
+RIG_ROOT="${GC_RIG_ROOT:?GC_RIG_ROOT must be set}"   # pack #223: assign before use (see workspace-resume)
 RIG_ROOT_ABS=$(git -C "$RIG_ROOT" rev-parse --show-toplevel)
 CACHE_DIR="$RIG_ROOT_ABS/.gc/cache/baselines/$BASELINE_SHA"
 
@@ -679,11 +573,13 @@ If anything outputs, you have uncommitted work. Either commit it under
 the right hat (feat/test/refactor/chore) or stash and investigate. Never
 push with untracked work left behind.
 
-**2. Commit the plan to the feature branch.**
+**2. Commit any plan amendment to the feature branch.**
 
-The plan at `plans/{{story_id}}.md` is the contract this story was
-implemented against. Make it part of the merged history so the audit
-trail survives the next worker rotation.
+The planner pool committed the plan at `plans/{{story_id}}.md`; this
+story was implemented against it. The implement and self-audit steps may
+have amended it (refactor-audit evidence, sensitive-file declarations) —
+commit the amendment so the audit trail survives the next worker
+rotation.
 
 ```bash
 git add -f plans/{{story_id}}.md
@@ -692,9 +588,9 @@ if ! git diff --cached --quiet; then
 fi
 ```
 
-`git diff --cached --quiet` skips the commit if the plan is already on
-the branch (e.g., from a resumed worker session that already committed
-it). The `-f` flag forces the add even on rigs whose `.gitignore`
+`git diff --cached --quiet` skips the commit if the plan on the branch
+is already current (the normal case when no amendment was needed — the
+planner committed it). The `-f` flag forces the add even on rigs whose `.gitignore`
 excludes `plans/` (a common pattern in rigs that pre-date the pack's
 audit-trail requirement). The plan is the contract this story was
 built against; the pack treats it as committed history regardless of

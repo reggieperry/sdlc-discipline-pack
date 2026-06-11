@@ -31,8 +31,9 @@
 #                       gc sets this at agent spawn. Unset → passthrough.
 #
 # Auto-resolved env (explicit value wins; production gc rarely sets these):
-#   SDLC_TEMPLATE     — pool template (worker/tester/reviewer/documenter/
-#                       finalizer). Auto-resolves from GC_SESSION_NAME
+#   SDLC_TEMPLATE     — pool template (planner/worker/tester/reviewer/
+#                       documenter/finalizer). Auto-resolves from
+#                       GC_SESSION_NAME
 #                       (e.g., `sdlc-discipline.worker-1` → `worker`).
 #                       Exits nonzero if neither SDLC_TEMPLATE nor
 #                       GC_SESSION_NAME is set.

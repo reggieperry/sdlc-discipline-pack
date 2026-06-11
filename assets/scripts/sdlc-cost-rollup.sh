@@ -107,6 +107,10 @@ COST_HELPER="$SCRIPT_DIR/sdlc-cost-helper.py"
 # agents/<phase>/agent.toml.
 pool_for_phase() {
   case "$1" in
+    # planner shares the worker's `sdlc` segment (agents/planner/agent.toml
+    # copies the worker's work_dir); the phase time window disambiguates
+    # which instance JSONLs belong to which phase.
+    planner)    echo "sdlc" ;;
     worker)     echo "sdlc" ;;
     tester)     echo "sdlc-testers" ;;
     reviewer)   echo "sdlc-reviewers" ;;
@@ -141,7 +145,7 @@ compute_phase_cost() {
   echo "$total"
 }
 
-for phase in worker tester reviewer documenter finalizer; do
+for phase in planner worker tester reviewer documenter finalizer; do
   SESSION=$(echo "$METADATA" | jq -r --arg p "$phase" '.["\($p).session_id"] // empty')
   if [ -n "$SESSION" ] && [ "$SESSION" != "null" ]; then
     STARTED=$(echo "$METADATA" | jq -r --arg p "$phase" '.["\($p).started_at"] // empty')

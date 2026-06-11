@@ -177,9 +177,9 @@ The SDLC discipline pack is a Gas City pack that provides discipline-layer funct
 
 **Principal-engineer guides** provide longer-form context that the rule files reference. These guides distill content from the foundational works discussed in Section 3.1 — Liskov, Parnas, Evans, Beck, Freeman and Pryce, Fowler — into a form the agent can read as background context when working on complex tasks.
 
-**Agent definitions** specify the agents that participate in the SDLC chain: a worker that writes code, a tester that verifies tests, a reviewer that audits against the standards, a documenter that updates documentation, and a finalizer that merges the pull request when everything passes.
+**Agent definitions** specify the agents that participate in the SDLC chain: a planner that writes and commits the implementation plan, a worker that writes code against that plan, a tester that verifies tests, a reviewer that audits against the standards, a documenter that updates documentation, and a finalizer that merges the pull request when everything passes.
 
-**Formulas** define the chain workflow that sequences these agents. A typical SDLC formula runs worker → tester → reviewer → documenter → finalizer, with failed audits triggering correction or escalation.
+**Formulas** define the chain workflow that sequences these agents. A typical SDLC formula runs planner → worker → tester → reviewer → documenter → finalizer, with failed audits triggering correction or escalation.
 
 **The differential gate** is the pack's anti-weakening mechanism. The gate runs as part of the test and review phases and refuses changes that introduce ruff or mypy errors against the baseline, add suppression directives, mark tests as skipped or expected-failure, or reduce assertion counts. The gate prevents the failure mode where an agent satisfies its task by lowering the bar rather than by doing the work.
 
@@ -201,9 +201,9 @@ Beads is built on Dolt, a versioned SQL database that provides Git-style branchi
 
 The vocabulary below recurs across Sections 5 through 9. The terms are introduced here so a reader who jumps to the case study or the implications sections can follow without having to re-derive their meaning from context. Each term names a specific operational concept rather than a metaphor.
 
-**Chain.** The fixed sequence of phases the SDLC discipline pack runs on one unit of work: worker → tester → reviewer → documenter → finalizer. A "chain run" or "chain" without further qualification refers to one walk of this sequence on one story.
+**Chain.** The fixed sequence of phases the SDLC discipline pack runs on one unit of work: planner → worker → tester → reviewer → documenter → finalizer. A "chain run" or "chain" without further qualification refers to one walk of this sequence on one story.
 
-**Phase.** One of the five steps in the chain, each carried by a different agent running in a fresh session under a phase-specific prompt and responsibility. The worker writes the code change. The tester runs the test suite, the differential gate, and the language-specific audits (lint, type-check, security scan). The reviewer audits the change against the pack's rules and the rig's project-specific overlays. The documenter writes the feature documentation. The finalizer opens or refreshes the pull request and merges it once the upstream gates pass.
+**Phase.** One of the six steps in the chain, each carried by a different agent running in a fresh session under a phase-specific prompt and responsibility. The planner writes the implementation plan and commits it to the feature branch. The worker writes the code change against that plan. The tester runs the test suite, the differential gate, and the language-specific audits (lint, type-check, security scan). The reviewer audits the change against the pack's rules and the rig's project-specific overlays. The documenter writes the feature documentation. The finalizer opens or refreshes the pull request and merges it once the upstream gates pass.
 
 **Story.** A specification for one chain-runnable unit of work. A story is a markdown file with structured frontmatter (acceptance criteria, sensitive-file declarations, dependencies on other stories, scope boundaries) and prose detailing what the work should produce. Stories are filed as beads in the task store; one chain run processes one story.
 

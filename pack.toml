@@ -2,13 +2,14 @@
 name = "sdlc-discipline"
 schema = 2
 
-# v2.0: five-pool polecat-pattern architecture, zero named sessions.
+# v2.0: pool-based polecat-pattern architecture, zero named sessions.
+# Pack #226 split the worker's plan phase into a dedicated planner pool.
 #
-# All five SDLC roles (worker, tester, reviewer, documenter, finalizer) are
-# pool agents — multiple concurrent instances per rig, each in its own
-# per-instance worktree. None are declared as [[named_session]] entries;
-# the supervisor scales each pool based on demand routed to its template
-# name via metadata.gc.routed_to.
+# All six SDLC roles (planner, worker, tester, reviewer, documenter,
+# finalizer) are pool agents — multiple concurrent instances per rig, each
+# in its own per-instance worktree. None are declared as [[named_session]]
+# entries; the supervisor scales each pool based on demand routed to its
+# template name via metadata.gc.routed_to.
 #
 # Bead handoffs between pools must set ONLY gc.routed_to (never --assignee).
 # The supervisor's default scale-check filters --unassigned; an assigned
