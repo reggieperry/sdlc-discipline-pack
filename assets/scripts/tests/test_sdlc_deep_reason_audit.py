@@ -37,6 +37,8 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
             "user.name=t",
             "-c",
             "commit.gpgsign=false",
+            "-c",
+            "tag.gpgsign=false",
             *args,
         ],
         cwd=cwd,
