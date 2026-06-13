@@ -1,5 +1,5 @@
 [order]
 description = "Periodic post-hoc deep-reasoning audit (pack #125). On each fire, generates a fresh-context Opus deep-reasoning prompt against the last N patch tags' commits + diffs, writes the prompt + window summary to reviews/deep-reason-audit-<date>.md at the rig root, and notifies the operator via sdlc-notify.sh. The operator opens Claude Code, pastes the prompt, and the agent returns a structured findings report — same shape as the manual deep-reason invocations that produced v2.29.6 and v2.29.10 corrections during Sessions 1 + 2. Defaults OFF — enable via SDLC_DEEP_REASON_AUDIT_ENABLED=true in the supervisor's env. Window size configurable via SDLC_DEEP_REASON_AUDIT_TAGS (default 5 tags). Cadence configurable via the `interval` field below. Bookmarks the most-recent-tag-audited at .gc/deep-reason-audit-state.json to avoid re-auditing the same window twice. Catches the cross-commit failure modes the in-chain phases (worker, tester, reviewer, slop-reviewer) cannot see: scope-narrowing claims, vocabulary drift across already-merged code, multi-version narrative honesty, Rule-of-Three regressions across adjacent merges."
 trigger = "cooldown"
-interval = "7d"
+interval = "168h"
 exec = "$PACK_DIR/assets/scripts/sdlc-deep-reason-audit.sh"
