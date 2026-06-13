@@ -8,4 +8,8 @@ pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.Wo
 idle_timeout = "1h"
 min_active_sessions = 0
 max_active_sessions = 2
-# No option_defaults model pin (status quo: inherit) — per-phase pins are the A/B lever, set at experiment time.
+# Pinned 2026-06-12 (supersedes the v2.41.0 deliberate-unpin): the unpinned state was the
+# model-A/B lever, but the A/B halted on the incumbent's (claude-fable-5) expected sunset —
+# pin to latest Opus so phases never ride an unstated host default. Re-pin per-phase if a
+# future A/B needs the lever back.
+option_defaults = { model = "claude-opus-4-8" }

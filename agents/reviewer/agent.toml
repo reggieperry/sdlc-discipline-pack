@@ -8,3 +8,6 @@ pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.Wo
 idle_timeout = "30m"
 min_active_sessions = 0
 max_active_sessions = 3
+# Pinned 2026-06-12: previously unpinned (inherit host default); pinned to latest Opus on the
+# incumbent's (claude-fable-5) expected sunset, so phases never ride an unstated host default.
+option_defaults = { model = "claude-opus-4-8" }

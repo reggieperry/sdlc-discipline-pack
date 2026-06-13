@@ -8,4 +8,4 @@ pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.Wo
 idle_timeout = "30m"
 min_active_sessions = 0
 max_active_sessions = 2
-option_defaults = { model = "claude-opus-4-7" }
+option_defaults = { model = "claude-opus-4-8" }
