@@ -114,7 +114,7 @@ Append a JSON-fenced block to the review file, then commit it:
 SLOP_TRAILER_JSON=$(cat <<'TRAILER_EOF'
 {
   "skipped": false,
-  "model": "claude-opus-4-7",
+  "model": "claude-opus-4-8",
   "found": <N>,
   "by_severity": {"critical": <n>, "high": <n>, "medium": <n>, "low": <n>},
   "findings": [
