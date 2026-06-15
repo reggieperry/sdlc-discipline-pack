@@ -57,5 +57,7 @@ if [ -z "$BEAD_ID" ]; then
     exit 1
 fi
 
-gc bd update "$BEAD_ID" --claim
+# Suppress the claim's "✓ Updated issue ..." stdout so ONLY the bead id is echoed
+# (the caller captures this script's stdout as the story id).
+gc bd update "$BEAD_ID" --claim >/dev/null
 echo "$BEAD_ID"

@@ -22,15 +22,14 @@ set -euo pipefail
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 RUBRIC="$SCRIPTS/../slop-rubric.prompt.md"
 
-# Passthrough: no STORY_ID means this is not a pool work-spawn (mayor / freelance);
-# there is nothing for the slop-reviewer to do.
-if [ -z "${STORY_ID:-}" ]; then
+# Step 1: claim the routed bead. gc does NOT inject STORY_ID into the session env,
+# so the orchestrator finds its own work the way the chain's claim step does:
+# sdlc-slop-claim.sh queries for the bead routed to this slop pool (via
+# GC_SESSION_NAME / GC_RIG, which gc does set), claims it, and echoes its id. No
+# claimable work -> drain cleanly.
+if ! STORY_ID="$("$SCRIPTS/sdlc-slop-claim.sh")" || [ -z "$STORY_ID" ]; then
     exit 0
 fi
-
-# Step 1: claim the routed bead (mark it claimed so the reconciler does not
-# double-spawn while we work). Best-effort: gc already routed it here.
-gc bd update "$STORY_ID" --claim >/dev/null 2>&1 || true
 
 # Step 2: record start metadata.
 "$SCRIPTS/sdlc-slop-metadata.sh" "$STORY_ID"

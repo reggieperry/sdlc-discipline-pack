@@ -141,8 +141,9 @@ class FinishHappyPathTests(unittest.TestCase):
             bd_log = (tmp / "bd-argv.log").read_text()
             self.assertIn("update EL-1", bd_log)
             self.assertIn("--status=open", bd_log)
-            self.assertIn("slop-reviewer.completed_at=", bd_log)
-            self.assertIn("slop-reviewer.findings_count=2", bd_log)
+            self.assertIn("slop_reviewer.completed_at=", bd_log)
+            self.assertIn("slop_reviewer.findings_count=2", bd_log)
+            self.assertNotIn("slop-reviewer.", bd_log, "metadata key must not use the hyphenated pool name (bd rejects it)")
             self.assertIn("gc.routed_to=elder/sdlc-discipline.documenter", bd_log)
 
             # gc runtime drain-ack was called.

@@ -69,7 +69,10 @@ def _spy_gc(tmp: Path, *, assigned_json: str, routed_json: str) -> Path:
         "    esac\n"
         "    exit 0\n"
         "fi\n"
+        # Real `gc bd update --claim` prints "✓ Updated issue: <id> — <title>" to
+        # stdout; replicate it so the test catches stdout pollution of the echoed id.
         'if [ "$1" = "bd" ] && [ "$2" = "update" ]; then\n'
+        '    echo "✓ Updated issue: $3 — claimed"\n'
         "    exit 0\n"
         "fi\n"
         "exit 0\n"

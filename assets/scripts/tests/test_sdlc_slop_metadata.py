@@ -48,8 +48,11 @@ class MetadataTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
             log = (tmp / "bd-argv.log").read_text()
             self.assertIn("update EL-1", log, f"bd update not called for the story; log={log!r}")
-            self.assertIn("slop-reviewer.session_id=sess-123", log)
-            self.assertIn("slop-reviewer.started_at=", log)
+            # Underscore namespace, not "slop-reviewer.*": bd rejects metadata keys
+            # containing a hyphen, so a regression to the pool name must fail here.
+            self.assertIn("slop_reviewer.session_id=sess-123", log)
+            self.assertIn("slop_reviewer.started_at=", log)
+            self.assertNotIn("slop-reviewer.", log, "metadata key must not use the hyphenated pool name (bd rejects it)")
 
     def test_session_id_defaults_to_unknown(self) -> None:
         with TemporaryDirectory() as tmp_str:
@@ -59,7 +62,7 @@ class MetadataTests(unittest.TestCase):
             result = _invoke(tmp, "EL-2", env_extra={"GC_SESSION_ID": ""})
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
             log = (tmp / "bd-argv.log").read_text()
-            self.assertIn("slop-reviewer.session_id=unknown", log)
+            self.assertIn("slop_reviewer.session_id=unknown", log)
 
     def test_missing_story_id_fails(self) -> None:
         with TemporaryDirectory() as tmp_str:

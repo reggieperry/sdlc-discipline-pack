@@ -143,8 +143,9 @@ class SkipEmitHappyPathTests(unittest.TestCase):
             bd_log = (tmp / "bd-argv.log").read_text()
             self.assertIn(f"update {STORY_ID}", bd_log, f"bd update not called; log={bd_log!r}")
             self.assertIn("--status=open", bd_log)
-            self.assertIn("slop-reviewer.skipped=true", bd_log)
-            self.assertIn("slop-reviewer.completed_at=", bd_log)
+            self.assertIn("slop_reviewer.skipped=true", bd_log)
+            self.assertIn("slop_reviewer.completed_at=", bd_log)
+            self.assertNotIn("slop-reviewer.", bd_log, "metadata key must not use the hyphenated pool name (bd rejects it)")
             self.assertIn("gc.routed_to=elder/sdlc-discipline.documenter", bd_log)
 
     def test_calls_drain_ack(self) -> None:

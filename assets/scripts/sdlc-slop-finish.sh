@@ -13,7 +13,7 @@
 #   3. append a fenced "## Slop trailer\n```json\n<TRAILER>\n```" block,
 #   4. git add / commit / push origin BRANCH,
 #   5. bd update STORY_ID --status=open --assignee "" with
-#        slop-reviewer.completed_at, slop-reviewer.findings_count, and
+#        slop_reviewer.completed_at, slop_reviewer.findings_count, and
 #        gc.routed_to=<rig>/sdlc-discipline.documenter,
 #   6. gc runtime drain-ack.
 #
@@ -39,7 +39,9 @@ if [ ! -r "$TRAILER_JSON_FILE" ]; then
     exit 2
 fi
 
-PHASE="slop-reviewer"
+# Metadata-key namespace — underscore form (bd rejects hyphenated keys); the
+# hyphenated "slop-reviewer" is the pool name, not a valid metadata key.
+MKEY="slop_reviewer"
 RIG="${GC_RIG:-unknown}"
 
 TRAILER_JSON=$(cat "$TRAILER_JSON_FILE")
@@ -65,8 +67,8 @@ git push origin "$BRANCH"
 bd update "$STORY_ID" \
     --status=open \
     --assignee "" \
-    --set-metadata "${PHASE}.completed_at=$(date -Iseconds)" \
-    --set-metadata "${PHASE}.findings_count=${FINDINGS_COUNT}" \
+    --set-metadata "${MKEY}.completed_at=$(date -Iseconds)" \
+    --set-metadata "${MKEY}.findings_count=${FINDINGS_COUNT}" \
     --set-metadata "gc.routed_to=${RIG}/sdlc-discipline.documenter"
 
 gc runtime drain-ack

@@ -8,7 +8,7 @@
 #   2. appends a JSON "## Slop trailer" recording {"skipped": true, "reason": ...},
 #   3. git add / commit / push the review file to origin/<BRANCH>,
 #   4. bd update the story to route it onward — status=open, assignee cleared,
-#      slop-reviewer.completed_at, slop-reviewer.skipped=true, and
+#      slop_reviewer.completed_at, slop_reviewer.skipped=true, and
 #      gc.routed_to=${GC_RIG}/sdlc-discipline.documenter,
 #   5. gc runtime drain-ack.
 #
@@ -31,7 +31,9 @@ if [ -z "$BRANCH" ]; then
     exit 2
 fi
 
-PHASE="slop-reviewer"
+# Metadata-key namespace — underscore form (bd rejects hyphenated keys); the
+# hyphenated "slop-reviewer" is the pool name, not a valid metadata key.
+MKEY="slop_reviewer"
 RIG="${GC_RIG:-unknown}"
 
 REVIEW_FILE=$(bd show "$STORY_ID" --json | jq -r '.[0].metadata.review_file')
@@ -53,8 +55,8 @@ git push origin "$BRANCH"
 bd update "$STORY_ID" \
     --status=open \
     --assignee "" \
-    --set-metadata "${PHASE}.completed_at=$(date -Iseconds)" \
-    --set-metadata "${PHASE}.skipped=true" \
+    --set-metadata "${MKEY}.completed_at=$(date -Iseconds)" \
+    --set-metadata "${MKEY}.skipped=true" \
     --set-metadata "gc.routed_to=${RIG}/sdlc-discipline.documenter"
 
 gc runtime drain-ack

@@ -1,5 +1,11 @@
 scope = "rig"
-provider = "claude"
+# Arm C (G0 bake-off): the slop-reviewer is a deterministic orchestrator
+# (sdlc-slop-armc.sh — tested scripts + one claude -p), not an open-ended Claude
+# session. The prompt_template below is inert under this provider (the
+# orchestrator ignores the composed argv); pre_start/work_dir still apply so the
+# orchestrator has a worktree to checkout and diff. Swap back to provider="claude"
+# for Arm A (incumbent) or to the Go-node provider for Arm B.
+provider = "slop-armc"
 prompt_template = "agents/slop-reviewer/prompt.template.md"
 wake_mode = "fresh"
 work_dir = ".gc/worktrees/{{.Rig}}/sdlc-slop-reviewers/{{.AgentBase}}"
