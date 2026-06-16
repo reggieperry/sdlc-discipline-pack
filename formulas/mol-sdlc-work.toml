@@ -338,6 +338,17 @@ The questions to ask:
    in this same story), override the spec and move the type. Document
    the override in your plan with one sentence of justification.
 
+   Then check the *touched module as a whole*, not just the new symbol.
+   State each module your diff changed in one sentence with no
+   conjunction (the `modularity.md` no-conjunction test). If the
+   sentence now needs an "and"/"or" to be honest, your addition grew an
+   existing module past its single responsibility — even if the new
+   symbol plausibly "belongs" there by name. Extract the drifted cluster
+   via Move Function, or justify the enlarged aggregate in your plan with
+   one sentence. This catches charter drift the per-symbol question above
+   misses: a type whose name fits the module while still adding a second
+   reason-to-change.
+
 3. **Nearby smells.** Look at modules adjacent to your diff — direct
    imports, callers, callees. Did your addition reveal a smell from
    the refactoring catalog (Duplicated Code, Long Function, Divergent

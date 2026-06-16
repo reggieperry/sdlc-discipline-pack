@@ -210,6 +210,8 @@ If the diff touches no Python code, Block H is a no-op. Note in the review file 
 
 If the diff touches any path on the rig's sensitive-files list (declared in `CLAUDE.md` if present) AND the plan did not declare it under "Sensitive files" — that is an automatic **blocker**. Sensitive-file scope must be explicit.
 
+**Change-kind classification (advisory).** For each sensitive-file path the diff touches, classify the change in one phrase and record it in the Merge-readiness Signal A bullet: **algorithm/constant/invariant change** — it alters a protected calculation, a threshold, or an invariant/construction-gate (deep design review) — versus **behavior-preserving move/rename** — it relocates or renames a protected symbol with no logic change (preservation review: relocation intact, public surface preserved, no semantic change). The sensitive-file review runs in BOTH cases; this classification scopes the scrutiny and makes it visible — it never downgrades a sensitive touch to "skip," and it does not change the recommendation tier (Signal A still routes `human_required`).
+
 ### Unsubstituted NEXT sentinels
 
 If the diff touches any file declared in `numbered_catalogs.*.sources` (in `.claude/rules/project/architecture.toml`), grep the diff for unsubstituted `\w+-NEXT` markers. Any hit is an automatic **blocker** — the worker was supposed to resolve the sentinel at plan time per `agents/worker/prompt.template.md`'s numbered-catalog discipline. Cite the file:line and the unresolved sentinel.
@@ -264,10 +266,13 @@ Recommendation: **<glance_merge | human_required>**
 Architectural signals: **<none fired | comma-separated letters>**
 
 <For each fired signal, one bullet describing the evidence from $SIGNALS_JSON.details, e.g.:>
-- **A** (sensitive_file): `agents/risk_agent.py` matched glob in rig-config sensitive_files
+- **A** (sensitive_file): `agents/risk_agent.py` matched glob in rig-config sensitive_files — change-kind: <algorithm/constant/invariant change | behavior-preserving move/rename>
 - **C** (domain_field_removed): `core/state.py` — `TradeProposal.expected_slippage` removed
 
 Diff stats: <lines_added> added, <lines_removed> removed across <files_changed> files; <"edits existing function bodies" | "pure-additive">.
+
+Cohesion notes (advisory, non-blocking): **<none | one bullet per touched module whose one-sentence charter now needs a conjunction>**
+<e.g.: - `core/trade/lifecycle.py` grew past its charter — its honest one-sentence description now needs an "and" (post-exit value objects AND the in-flight ActiveTrade aggregate); candidate follow-up refactor (Move Function the in-flight cluster out).>
 
 <One sentence on why this recommendation: which cliff was crossed, or which signal was decisive.>
 
@@ -280,6 +285,8 @@ or
 Be specific in findings. "Looks fine" is not a finding. "<file>:<line> — <concrete observation>" is.
 
 The **Merge readiness** section renders the signals JSON for a human reader. Take the values from `$SIGNALS_JSON` captured above; do not re-derive them. The verdict (PASS/FAIL) is separate from the recommendation (glance_merge / human_required) — a PASS verdict with a `human_required` recommendation means "no blockers, but the PR touches architectural surfaces and should not auto-merge." The two-tier model replaced the earlier three-tier one in issue #191: the middle `review_encouraged` tier was the residual fallthrough bucket, never gated a fix, and its delayed-merge buffer never fired; the reviewer phase still surfaces every finding regardless of tier.
+
+The **Cohesion notes** and the Signal A **change-kind** are advisory: they inform the reader and seed a follow-up refactor, but they never change the verdict or the recommendation tier. A module that grew past its charter is a debt note, not a blocker; a behavior-preserving move of a sensitive file is still reviewed, just scoped to a preservation check.
 
 ## Commit the review to the feature branch
 
