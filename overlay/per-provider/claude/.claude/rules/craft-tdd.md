@@ -1,9 +1,9 @@
 ---
 paths:
+  - "**/*.py"
   - "**/*.go"
   - "**/*.sh"
-  - "**/*.py"
-  - "tests/**"
+  - "**/tests/**"
 ---
 
 # Test-driven development and the design feedback it gives

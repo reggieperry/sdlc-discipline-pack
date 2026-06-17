@@ -1,9 +1,9 @@
 ---
 paths:
-  - "**/*.go"
   - "**/*.py"
-  - "**/*_test.go"
-  - "tests/**"
+  - "**/*.go"
+  - "**/*.sh"
+  - "**/tests/**"
 ---
 
 # Abstraction, specification, and substitutability

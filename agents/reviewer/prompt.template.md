@@ -166,7 +166,7 @@ The rules are organized in three layers — language-neutral `craft-*`, plus per
   - `craft-refactoring.md` — Two Hats discipline visible in the commits (no feature commit bundled with a refactor commit), refactor commits name moves from the catalog.
   - `craft-tdd.md` / `craft-xunit.md` — tests precede implementation, test names describe behaviors, mocks-as-peers (not internals), allowance vs. expectation distinction, diagnostic messages on assertions in domain language.
   - `craft-documentation.md` — docstrings describe the contract (what / why), not the implementation.
-- **Python diffs** — `python-style.md` (idiom adherence, function-length cap, prose-only docstrings), `python-types.md` (typing, no `dict[str, Any]` returns on the public surface), `python-errors.md` (no broad except that silences), plus `python-concurrency.md`, `python-testing.md`, `python-llm.md` as the diff touches them.
+- **Python diffs** — `python-style.md` (idiom adherence, function-length cap, prose-only docstrings), `python-types.md` (typing, no `dict[str, Any]` returns on the public surface), `python-errors.md` (no broad except that silences), `python-modules.md` (module layout, ≤7 public names, no grab-bag), plus `python-concurrency.md`, `python-testing.md`, `python-security.md`, `python-llm.md` as the diff touches them.
 - **Go diffs** — `go-style.md`, `go-errors.md` (errors-as-values, `%w` wrapping, `errors.Is`/`As`), `go-types.md` (accept interfaces, return concrete; no leaked vendor type), plus `go-concurrency.md` (context propagation, `-race`), `go-modules.md`, `go-testing.md`, `go-llm.md` as the diff touches them.
 - `decoupling.md` — only relevant if files under `.claude/` are touched.
 

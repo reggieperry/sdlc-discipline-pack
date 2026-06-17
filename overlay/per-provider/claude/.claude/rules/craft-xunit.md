@@ -1,19 +1,20 @@
 ---
 paths:
-  - "tests/**"
+  - "**/tests/**"
   - "**/test_*.py"
   - "**/*_test.py"
+  - "**/*_test.go"
 ---
 
 > Full reasoning, taxonomy, and worked examples: `.claude/sdlc-discipline/guides/xunit-test-patterns-guide.md`.
-> See `craft-tdd.md` for the TDD discipline these patterns live inside; `craft-tdd.md` for the structural rules; `goos-guide.md` for the Freeman/Pryce design lens.
+> See `craft-tdd.md` for the TDD discipline these patterns live inside; `python-testing.md` / `go-testing.md` for the language-specific structural test rules; `goos-guide.md` for the Freeman/Pryce design lens.
 > The spine of this rule is Gerard Meszaros, *xUnit Test Patterns: Refactoring Test Code* (Addison-Wesley, 2007). It supplies the vocabulary the other rules use implicitly.
 
 # xUnit test patterns
 
 ## Why this rule exists
 
-The other testing rules (`craft-tdd.md`, `craft-tdd.md`) say what to do; Meszaros's vocabulary lets reviewers and authors name *why* something is wrong precisely. "Fragile Test from Context Sensitivity," "Assertion Roulette from missing assertion messages," "Eager Test verifying two concerns" — each maps to a named fix in the catalog. Without the vocabulary, the same conversations recur as ad-hoc "this feels off" exchanges.
+The other testing rules (`craft-tdd.md`, `python-testing.md` / `go-testing.md`) say what to do; Meszaros's vocabulary lets reviewers and authors name *why* something is wrong precisely. "Fragile Test from Context Sensitivity," "Assertion Roulette from missing assertion messages," "Eager Test verifying two concerns" — each maps to a named fix in the catalog. Without the vocabulary, the same conversations recur as ad-hoc "this feels off" exchanges.
 
 ## Test Double taxonomy — pick the right one
 

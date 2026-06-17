@@ -1,8 +1,9 @@
 ---
 paths:
+  - "**/*.py"
   - "**/*.go"
   - "**/*.sh"
-  - "**/*.py"
+  - "**/tests/**"
 ---
 
 # Documentation and comments

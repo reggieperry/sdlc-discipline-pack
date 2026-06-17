@@ -3,8 +3,7 @@ paths:
   - "**/*.py"
   - "**/*.go"
   - "**/*.sh"
-  - "tests/**"
-  - "**/*_test.go"
+  - "**/tests/**"
 ---
 
 # Domain modeling
