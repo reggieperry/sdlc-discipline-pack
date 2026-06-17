@@ -175,7 +175,7 @@ Concrete heuristics:
 
 - A module exporting more than seven public names probably hides at least two abstractions. Audit the exports; group by which call sites use which names; consider splitting.
 - A module under 30 lines is suspect on the other end. Either it is the right size for a small abstraction (a Protocol declaration, a value type) or it is a fragment that belongs in a parent module.
-- The 25-line function rule from `python.md` operates inside the module. The module-level analog is the seven-export ceiling above.
+- The 25-line function rule from `python-style.md` operates inside the module. The module-level analog is the seven-export ceiling above.
 
 Liskov's structured-programming size rule (page 6, citing Mills): individual functions ("modules" in her vocabulary) should fit on one printout page. The 25-line ceiling is the modern restatement.
 
@@ -325,7 +325,7 @@ In practice in this codebase:
 
 - Inheritance for code reuse is forbidden. Use composition.
 - Inheritance for *interface declaration* is acceptable but `Protocol` is preferred — it is structural, does not require declaration at the implementation site, and supports duck typing for tests.
-- Abstract base classes (`ABC`) are forbidden until two concrete implementations exist (already in `python.md`).
+- Abstract base classes (`ABC`) are forbidden until two concrete implementations exist (already in `python-style.md`).
 
 ## 9. Boundary contracts and enforcement
 
@@ -377,7 +377,7 @@ In test code, LSP is the property that makes substitution safe: an `InMemoryStor
 
 Each entry below is a specific failure mode this guide rejects. They are the mirror image of §§2–11.
 
-- **The grab bag.** A module named `utils.py`, `helpers.py`, `common.py`, `core_utils.py`, `misc.py`. Already in `python.md`. The fix is to identify which of the kinds of useful abstraction in §2 each function belongs to and move it there.
+- **The grab bag.** A module named `utils.py`, `helpers.py`, `common.py`, `core_utils.py`, `misc.py`. Already in `python-style.md`. The fix is to identify which of the kinds of useful abstraction in §2 each function belongs to and move it there.
 - **The god object.** A single type or module that every other module reads from and writes to. The Elder pipeline's old `PipelineState` is the canonical example; the refactor splits it into typed events. The fix is to invert: each stage produces and consumes typed values; nothing is shared mutable.
 - **The fat connection.** A level whose public surface is `dict[str, Any]`, `**kwargs`, or a base class that callers must downcast. The fix is to type the surface with a frozen dataclass, narrowing the contract.
 - **The leaky resource.** A level that exposes its underlying resource (returns the `httpx.Response`, returns the database row tuple, returns the `Order` object from `ib_async`). The fix is to translate at the boundary into a domain type.
@@ -444,7 +444,7 @@ The decision is about who pays the cost of a knob. Before exporting a configurat
 
 Symptoms of leaked complexity upward: callers consistently passing the same value; defaults that "no one would change"; init signatures that read like API documentation rather than dependency lists.
 
-This complements `code-structure.md`'s "configuration is part of the public API" — that rule says *expose* the knob when it's tunable at runtime; this rule says *don't invent* the knob when a default would do. The deciding question: would a different value of this knob change observed behavior in production? If yes, expose. If "no, we just want it configurable for testing," default it strongly and let tests override.
+This complements `craft-complexity.md`'s "configuration is part of the public API" — that rule says *expose* the knob when it's tunable at runtime; this rule says *don't invent* the knob when a default would do. The deciding question: would a different value of this knob change observed behavior in production? If yes, expose. If "no, we just want it configurable for testing," default it strongly and let tests override.
 
 ### 14.4 General-purpose interfaces are deeper
 
@@ -466,7 +466,7 @@ If a method has one caller and its name encodes that caller's intent, refactor t
 
 Modules named `loader`, `parser`, `writer`, `validator` are red-flag verbs implying ordering. The orchestration spine is the legitimate place for time-ordering — it owns the sequence. Stage modules are organized by *what knowledge they encapsulate*, not *when they run*. If two stages share a domain concept, the concept lives in a third module owned by neither, called by both.
 
-This is `code-structure.md`'s bounded-context rule from a different angle. A bounded context groups by domain knowledge; a temporal decomposition groups by sequence position. The first is stable across requirements changes; the second rots when the sequence changes.
+This is `craft-complexity.md`'s bounded-context rule from a different angle. A bounded context groups by domain knowledge; a temporal decomposition groups by sequence position. The first is stable across requirements changes; the second rots when the sequence changes.
 
 ### 14.6 Define errors out of existence
 
@@ -502,11 +502,11 @@ This is the operational complement to Liskov's §7 specification discipline. Lis
 
 When the work runs more than a day, sketch a one-paragraph alternative — even a deliberately bad one — and compare. The act of contrast surfaces what makes the chosen design good. Ousterhout argues most engineers skip this because it feels wasteful; the contrast is exactly what gives you signal that the first design wasn't obvious-by-accident.
 
-Capture the considered alternatives in the PR description or ADR. One paragraph each, with pros and cons. Pairs with `refactoring.md`'s preparatory-refactoring discipline — design-twice is how you tell whether the simpler design has painted into a corner before you commit to it.
+Capture the considered alternatives in the PR description or ADR. One paragraph each, with pros and cons. Pairs with `craft-refactoring.md`'s preparatory-refactoring discipline — design-twice is how you tell whether the simpler design has painted into a corner before you commit to it.
 
 ### 14.9 Where Ousterhout and the rest of this pack disagree
 
-Ousterhout is hostile to TDD (Ch 19.4) — he reads it as fragmenting design thinking into too-small steps. This pack reads `tdd.md` and `goos-guide.md` as the stronger position: tests are the design oracle, and the dialog between design-as-listening and design-as-thinking is more productive than either pole alone. Where the two methods conflict, the pack follows GOOS; Ousterhout's complexity vocabulary remains useful as the *judging* surface that test-pain alone can miss.
+Ousterhout is hostile to TDD (Ch 19.4) — he reads it as fragmenting design thinking into too-small steps. This pack reads `craft-tdd.md` and `goos-guide.md` as the stronger position: tests are the design oracle, and the dialog between design-as-listening and design-as-thinking is more productive than either pole alone. Where the two methods conflict, the pack follows GOOS; Ousterhout's complexity vocabulary remains useful as the *judging* surface that test-pain alone can miss.
 
 Strategic vs tactical programming (Ch 3) is covered indirectly by the pack's broader posture — most work in a chained-agent context is tactical (one story at a time), but the modularity, refactoring, and DDD rules force occasional strategic moves at scope boundaries.
 

@@ -1,19 +1,20 @@
 ---
 paths:
-  - "tests/**"
+  - "**/tests/**"
   - "**/test_*.py"
   - "**/*_test.py"
+  - "**/*_test.go"
 ---
 
 > Full reasoning, taxonomy, and worked examples: `.claude/sdlc-discipline/guides/xunit-test-patterns-guide.md`.
-> See `tdd.md` for the TDD discipline these patterns live inside; `testing.md` for the structural rules; `goos-guide.md` for the Freeman/Pryce design lens.
+> See `craft-tdd.md` for the TDD discipline these patterns live inside; `python-testing.md` / `go-testing.md` for the language-specific structural test rules; `goos-guide.md` for the Freeman/Pryce design lens.
 > The spine of this rule is Gerard Meszaros, *xUnit Test Patterns: Refactoring Test Code* (Addison-Wesley, 2007). It supplies the vocabulary the other rules use implicitly.
 
 # xUnit test patterns
 
 ## Why this rule exists
 
-The other testing rules (`tdd.md`, `testing.md`) say what to do; Meszaros's vocabulary lets reviewers and authors name *why* something is wrong precisely. "Fragile Test from Context Sensitivity," "Assertion Roulette from missing assertion messages," "Eager Test verifying two concerns" — each maps to a named fix in the catalog. Without the vocabulary, the same conversations recur as ad-hoc "this feels off" exchanges.
+The other testing rules (`craft-tdd.md`, `python-testing.md` / `go-testing.md`) say what to do; Meszaros's vocabulary lets reviewers and authors name *why* something is wrong precisely. "Fragile Test from Context Sensitivity," "Assertion Roulette from missing assertion messages," "Eager Test verifying two concerns" — each maps to a named fix in the catalog. Without the vocabulary, the same conversations recur as ad-hoc "this feels off" exchanges.
 
 ## Test Double taxonomy — pick the right one
 
@@ -29,7 +30,7 @@ Five distinct kinds. Don't say "mock" generically; name the kind:
 
 A **Hard-Coded Test Double** bakes responses into the class; a **Configurable Test Double** accepts setup that feeds values. Default to configurable.
 
-The "mock peers not internals" rule in `tdd.md` applies to *all* Test Doubles. The vocabulary refines the rule but does not change it.
+The "mock peers not internals" rule in `craft-tdd.md` applies to *all* Test Doubles. The vocabulary refines the rule but does not change it.
 
 ## Indirect inputs vs indirect outputs
 
@@ -77,7 +78,7 @@ Default chain of choices, in order of preference:
 Setup styles, in order of clarity:
 
 - **In-line Setup** — fixture built inside the test. Most explicit; use for unusual fixtures.
-- **Delegated Setup** — test calls a Creation Method (`_a_proposal(...)`). Default for shared shapes — pairs with the Test Data Builder pattern in `tdd.md`.
+- **Delegated Setup** — test calls a Creation Method (`_a_proposal(...)`). Default for shared shapes — pairs with the Test Data Builder pattern in `craft-tdd.md`.
 - **Implicit Setup** — fixture built in pytest's `fixture` decorator. Use when identical across many tests in one class.
 - **Lazy Setup** — fixture built in first test that needs it. `scope="session"` fixtures.
 
@@ -118,10 +119,10 @@ When designing the test surface for a new module, walk these steps in order:
 - Mock Object with many expectations on the same DOC (treat each expectation as a separate test or step back to Test Spy).
 - Multiple-assertion test with no Assertion Messages (Assertion Roulette).
 - `if`/`for`/`try` in test body (Conditional Test Logic).
-- Test name in method-shape rather than behavior-shape (see `tdd.md`).
+- Test name in method-shape rather than behavior-shape (see `craft-tdd.md`).
 - Reusing test ending state as next test starting state (Interacting Tests; same as principle #6 violation).
 
-## Self-audit checklist (pair with `tdd.md`'s)
+## Self-audit checklist (pair with `craft-tdd.md`'s)
 
 Before declaring a test PR done:
 

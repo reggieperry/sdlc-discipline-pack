@@ -304,7 +304,7 @@ For `red-green-refactor` steps:
    over-implement — only the named behavior.
 3. **Refactor (local pass).** Clean up the immediate change under green
    tests. Apply only refactorings from the catalog (Extract Function,
-   Rename, etc. — see `refactoring.md` when its glob fires). If you
+   Rename, etc. — see `craft-refactoring.md` when its glob fires). If you
    cannot name the move from the catalog, you are not refactoring; you
    are rewriting. Stop.
 
@@ -325,7 +325,7 @@ The questions to ask:
 
 1. **Module cap.** For each file your diff touched, count its public
    names after the change. If any file is now over the modularity cap
-   (≤ 7 public names per module per `modularity.md`), the thing you
+   (≤ 7 public names per module per `craft-abstraction.md`), the thing you
    added probably belongs elsewhere, OR the existing file is overdue
    for decomposition. Either way, act on it now.
 
@@ -340,7 +340,7 @@ The questions to ask:
 
    Then check the *touched module as a whole*, not just the new symbol.
    State each module your diff changed in one sentence with no
-   conjunction (the `modularity.md` no-conjunction test). If the
+   conjunction (the `craft-abstraction.md` no-conjunction test). If the
    sentence now needs an "and"/"or" to be honest, your addition grew an
    existing module past its single responsibility — even if the new
    symbol plausibly "belongs" there by name. Extract the drifted cluster
@@ -401,17 +401,17 @@ call at merge time, not yours.
 The rig's `.claude/rules/` directory has the discipline rules. They
 auto-load when you edit matching files. Notable ones for this step:
 
-- `python.md` — function bodies under 25 lines, prose-only docstrings,
+- `python-style.md` — function bodies under 25 lines, prose-only docstrings,
   no `dict[str, Any]` returns, specific exception types, type hints
   everywhere, f-strings only, no bare except.
-- `tdd.md` — behavior-named tests, diagnostic messages on assertions
+- `craft-tdd.md` — behavior-named tests, diagnostic messages on assertions
   in domain language, mocks are peers (not internals), allowances vs.
   expectations distinction.
-- `code-structure.md` — Tell-Don't-Ask, return typed output don't
+- `craft-complexity.md` — Tell-Don't-Ask, return typed output don't
   mutate shared state, domain-typed equality.
-- `modularity.md` — ≤7 public names per module, no fat connections,
+- `craft-abstraction.md` — ≤7 public names per module, no fat connections,
   specific resource ownership.
-- `refactoring.md` — Two Hats, the catalog of moves, R/G/R rhythm.
+- `craft-refactoring.md` — Two Hats, the catalog of moves, R/G/R rhythm.
 
 If a rule fires and contradicts what you're about to do, the rule wins.
 
