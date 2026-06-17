@@ -2,7 +2,7 @@
 
 A principal-engineer reference for the vocabulary and design language of test code. The spine of this guide is Gerard Meszaros, *xUnit Test Patterns: Refactoring Test Code* (Addison-Wesley Signature Series, 2007), with citations by page where the position depends on the primary text. Where the GOOS guide (`goos-guide.md`) already covers a point, this guide cites it rather than restating; Meszaros and Freeman/Pryce overlap substantially on the TDD spine but Meszaros uniquely supplies the **pattern language** — the named smells and named patterns that the team uses when talking about test code.
 
-The terse rule that loads on test paths is `rules/xunit-patterns.md`. This guide is the reasoning, the citations, and the worked examples.
+The terse rule that loads on test paths is `rules/craft-xunit.md`. This guide is the reasoning, the citations, and the worked examples.
 
 A vocabulary note. **Test Double** is the umbrella; **mock** is one of five distinct subtypes. Saying "I added a mock" when what was added is a Stub or a Spy is one of the most common sources of confusion in test-code review. The taxonomy in §3 below is the load-bearing piece of this guide; everything else extends or interprets it.
 
@@ -31,7 +31,7 @@ Every Fully Automated Test has four sequential phases (Four-Phase Test, p. 358):
 
 The phases must be visible at a glance. Blank lines separating them; comments only if the structure isn't already obvious. Alternating exercise/verify calls inside a Test Method is an **Eager Test** (p. 192) — the surest sign a Test Method is testing more than one concern.
 
-The "Arrange-Act-Assert" naming popular in many xUnit-derived frameworks (and used in `rules/testing.md`) is the same four-phase anatomy with Teardown collapsed into the framework's implicit-teardown lifecycle.
+The "Arrange-Act-Assert" naming popular in many xUnit-derived frameworks (and used in `rules/craft-tdd.md`) is the same four-phase anatomy with Teardown collapsed into the framework's implicit-teardown lifecycle.
 
 ## 3. The Test Double taxonomy
 
@@ -194,7 +194,7 @@ The TDD discipline. GOOS calls this the Golden Rule. Tests before code clarify a
 
 ### 5.2 Design for Testability (p. 40)
 
-Load-bearing when TDD is skipped (which it shouldn't be, but is, sometimes). Constructor injection over service location; sensible peer-stereotype defaults (`tdd.md`'s peer stereotypes); the Humble Object pattern (p. 695) for components that can't be tested directly.
+Load-bearing when TDD is skipped (which it shouldn't be, but is, sometimes). Constructor injection over service location; sensible peer-stereotype defaults (`craft-tdd.md`'s peer stereotypes); the Humble Object pattern (p. 695) for components that can't be tested directly.
 
 ### 5.3 Use the Front Door First (p. 41)
 
@@ -320,7 +320,7 @@ A **Fixture** (p. 297) is the state the SUT needs to be in before Exercise. Stra
 ### 7.3 By setup style
 
 - **In-line Setup** (p. 408) — fixture built inside the Test Method. Most explicit; use for unusual fixtures or one-off tests.
-- **Delegated Setup** (p. 411) — Test Method calls a Creation Method (`_a_proposal(...)`). Default for shared shapes; pairs with the Test Data Builder pattern in `tdd.md`.
+- **Delegated Setup** (p. 411) — Test Method calls a Creation Method (`_a_proposal(...)`). Default for shared shapes; pairs with the Test Data Builder pattern in `craft-tdd.md`.
 - **Implicit Setup** (p. 424) — fixture built in a `setUp` method (or pytest `fixture` decorator). Use when the fixture is identical across many tests in one class.
 - **Lazy Setup** (p. 435) — fixture built in the first test that needs it. `scope="session"` fixtures in pytest.
 
@@ -378,11 +378,11 @@ This guide is a sibling to `goos-guide.md`; both treat tests as design feedback.
 
 In Elder, the two are complementary:
 
-- The TDD discipline in `rules/tdd.md` is GOOS-shaped: outer/inner loops, listen-to-the-tests, peer stereotypes, test data builders.
-- The structural rules in `rules/testing.md` are pragmatic xUnit conventions: arrange/act/assert, fresh fixture, fault injection, property tests.
-- The vocabulary in `rules/xunit-patterns.md` (and this guide) is Meszaros-shaped: name the Double, name the smell, name the pattern.
+- The TDD discipline in `rules/craft-tdd.md` is GOOS-shaped: outer/inner loops, listen-to-the-tests, peer stereotypes, test data builders.
+- The structural rules in `rules/craft-tdd.md` are pragmatic xUnit conventions: arrange/act/assert, fresh fixture, fault injection, property tests.
+- The vocabulary in `rules/craft-xunit.md` (and this guide) is Meszaros-shaped: name the Double, name the smell, name the pattern.
 
-When a chain agent or reviewer is in doubt about *what to do*, they reach for `tdd.md` first. When they need to *name what's wrong*, they reach for `xunit-patterns.md`. The two are not in tension.
+When a chain agent or reviewer is in doubt about *what to do*, they reach for `craft-tdd.md` first. When they need to *name what's wrong*, they reach for `craft-xunit.md`. The two are not in tension.
 
 The DDD guide (`ddd-guide.md`) and Modularity guide (`modularity-guide.md`) are upstream of all of this: they shape the SUT into something testable. The Refactoring guide (`refactoring-guide.md`) supplies the moves used during the refactor step. Together, the five guides form the discipline pack's principal-engineer reference shelf.
 

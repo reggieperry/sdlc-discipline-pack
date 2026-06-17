@@ -158,12 +158,16 @@ When `metadata.source_audit_doc` is unset, skip this section entirely. The cross
 
 The auto-loaded rules in `.claude/rules/` define the standards. As you read the diff, the relevant rules will fire on the files you open. Particular self-audits to apply at this stage:
 
-- `python.md` — typing, idiom adherence, function-length cap, prose-only docstrings, no broad except, no `dict[str, Any]` returns on the public surface.
-- `tdd.md` — tests precede implementation, test names describe behaviors, mocks-as-peers (not internals), allowance vs. expectation distinction, diagnostic messages on assertions in domain language.
-- `refactoring.md` — Two Hats discipline visible in the commits (no feature commit bundled with a refactor commit), refactor commits name moves from the catalog.
-- `modularity.md` — module depth (no shallow pass-through / middle-man whose interface mirrors its implementation), behavioral-LSP substitutability where inheritance is used (subtype preconditions no stronger, postconditions no weaker), no leaky resource (a raw vendor type — `httpx.Response`, an `ib_async` order — escaping a boundary), plus no god objects and no fat connections.
-- `code-structure.md` — Tell-Don't-Ask, domain-typed equality.
-- `ddd.md` — bounded-context boundaries hold: no domain type imported across a context boundary (import-linter already backstops cross-*package* imports, so look specifically for shared-state leaks via a shared module like `core/state` and aggregate roots constructed outside their factory); a touched persistence function carries its one-line Aggregate / Invariant / Boundary contract.
+The rules are organized in three layers — language-neutral `craft-*`, plus per-language `python-*` and `go-*` overlays that fire on the matching file type. Apply the layers relevant to the diff's languages.
+
+- **Craft (language-neutral, fires on any code).**
+  - `craft-abstraction.md` / `craft-complexity.md` — module depth (no shallow pass-through / middle-man whose interface mirrors its implementation), behavioral-LSP substitutability where inheritance is used (subtype preconditions no stronger, postconditions no weaker), no leaky resource (a raw vendor type escaping a boundary), no god objects, no fat connections, Tell-Don't-Ask, domain-typed equality.
+  - `craft-domain-modeling.md` — bounded-context boundaries hold: no domain type imported across a context boundary (import-linter backstops cross-*package* imports, so look specifically for shared-state leaks via a shared module and aggregate roots constructed outside their factory); a touched persistence function carries its one-line Aggregate / Invariant / Boundary contract.
+  - `craft-refactoring.md` — Two Hats discipline visible in the commits (no feature commit bundled with a refactor commit), refactor commits name moves from the catalog.
+  - `craft-tdd.md` / `craft-xunit.md` — tests precede implementation, test names describe behaviors, mocks-as-peers (not internals), allowance vs. expectation distinction, diagnostic messages on assertions in domain language.
+  - `craft-documentation.md` — docstrings describe the contract (what / why), not the implementation.
+- **Python diffs** — `python-style.md` (idiom adherence, function-length cap, prose-only docstrings), `python-types.md` (typing, no `dict[str, Any]` returns on the public surface), `python-errors.md` (no broad except that silences), plus `python-concurrency.md`, `python-testing.md`, `python-llm.md` as the diff touches them.
+- **Go diffs** — `go-style.md`, `go-errors.md` (errors-as-values, `%w` wrapping, `errors.Is`/`As`), `go-types.md` (accept interfaces, return concrete; no leaked vendor type), plus `go-concurrency.md` (context propagation, `-race`), `go-modules.md`, `go-testing.md`, `go-llm.md` as the diff touches them.
 - `decoupling.md` — only relevant if files under `.claude/` are touched.
 
 For each finding, classify as:
@@ -176,7 +180,7 @@ A review with any **blocker** fails. A review with only `tech-debt` and `nit` pa
 
 ### Security audit (Block H)
 
-`security.md` auto-loads on `**/*.py` edits and codifies the security-hardening rule set (OWASP Top 10:2025, OpenSSF Python Secure Coding Guide, OWASP LLM Top 10:2025). As reviewer, walk the diff through its sections — Trust boundaries, Secrets, Databases, Python anti-patterns, Cryptography, LLM applications, Worker discipline — and tier each violation per the mapping below.
+`python-security.md` auto-loads on `**/*.py` edits and `go-security.md` on `**/*.go` edits; together they codify the security-hardening rule set (OWASP Top 10:2025, the OpenSSF secure-coding guides, OWASP LLM Top 10:2025). As reviewer, walk the diff through the matching rule's sections — Trust boundaries, Secrets, Databases, language anti-patterns, Cryptography, LLM applications, Worker discipline — and tier each violation per the mapping below. (The example violations below are Python-flavored; apply the `go-security.md` equivalent for Go diffs.)
 
 **Blocker** — the diff cannot merge until the violation is fixed:
 
@@ -202,9 +206,9 @@ A review with any **blocker** fails. A review with only `tech-debt` and `nit` pa
 
 Cite findings with the section name in the existing convention: `[blocker] [security:Secrets] core/api.py:42 — API key hardcoded in module constant` or `[tech-debt] [security:Trust boundaries] core/handlers.py:88 — raw dict consumed without validator`. The finalizer's tech-debt auto-file routes these directly.
 
-If the rig ships a project-level security overlay (e.g. `.claude/rules/project/security-*.md`), walk its sections too — rig overlays cover money-precision, broker-credential, connection-isolation, and order-idempotency concerns the pack-generic `security.md` explicitly disclaims.
+If the rig ships a project-level security overlay (e.g. `.claude/rules/project/security-*.md`), walk its sections too — rig overlays cover money-precision, broker-credential, connection-isolation, and order-idempotency concerns the pack-generic `python-security.md` / `go-security.md` explicitly disclaim.
 
-If the diff touches no Python code, Block H is a no-op. Note in the review file that the diff is doc-only or non-Python and proceed.
+If the diff touches no Python or Go code, Block H is a no-op. Note in the review file that the diff is doc-only and proceed.
 
 ### Sensitive files
 

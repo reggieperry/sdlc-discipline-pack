@@ -1,0 +1,75 @@
+---
+paths:
+  - "**/*.go"
+---
+
+# Go security
+
+The defenses against a program's real attack surface — when it shells out to external tools (`git`, a linter, the `go` toolchain), creates and reads temp files and working directories, parses untrusted JSON/stdout from external tools, and makes bounded LLM calls. So command injection, path traversal, untrusted-input parsing, resource exhaustion, and the model I/O boundary are the load-bearing classes for that kind of program, but this is a general Go-security rule. Sources, all primary: the gosec rule catalog (`securego/gosec` `RULES.md`, with every CWE here read from gosec's own `ruleToCWE` map in `issue/issue.go`), go.dev/security (best-practices, govulncheck, the module reference), the Go stdlib package docs (`os/exec`, `path/filepath`, `database/sql`, `html/template`, `crypto/rand`, `crypto/subtle`, `os.Root`), the Go blog (`go.dev/blog/osroot`, `go.dev/blog/path-security`), OWASP Go-SCP, and the CISA/MITRE 2024 CWE Top 25 — corroborated by the Snyk, Datadog, and Semgrep Go cheat sheets.
+
+> See `go-errors.md` for never dropping an error and never leaking secrets into error strings (gosec G104, CWE-703), `go-concurrency.md` for the context timeout on every external call, `go-types.md` for encoding invariants so bad input can't construct a bad value, `go-modules.md` for pinning and verifying `go.mod`/`go.sum`, `go-testing.md` for fuzzing the parsing boundary, and `go-llm.md` for the bounded structured-output schema as the typed model boundary.
+
+## Run the security toolchain in the gate
+
+- **Run `govulncheck ./...` and fail on findings** — it scans against the Go vulnerability database (`vuln.go.dev`) and reports only vulnerabilities your code transitively *calls*, not merely depends on, so its findings are actionable. go.dev/security/best-practices names it the first practice; wire it into CI. (`go-modules.md`.)
+- **Run `gosec ./...` as the static-security linter** — it is the canonical Go security catalog (G101–G602 plus the G7xx taint rules below); the rules in this file are organized around it. Treat a new gosec finding the way a strict lint gate treats a new linter finding: a regression to fix, not to `//nolint`.
+- **Keep the Go toolchain and dependencies current** — point releases carry security fixes for the toolchain and stdlib (go.dev/security/best-practices); subscribe to `golang-announce`. But review before bumping: an unreviewed dependency bump can introduce malicious code.
+- **Run `go vet ./...` and `go test -race ./...`** — `vet` flags suspicious constructs the compiler accepts; `-race` finds data races at runtime (only on executed paths, so coverage matters). (`go-concurrency.md`.)
+- **Fuzz the untrusted-input parsing boundary** — go.dev/security/best-practices calls out fuzzing for injection, overflow, and DoS-class bugs that hand-written cases miss; the JSON/stdout decoders that consume external-tool output are exactly that boundary. (`go-testing.md`.)
+
+## Command execution (gosec G204 / CWE-78; G702 taint)
+
+- **Pass arguments as separate `exec.Command(name, arg1, arg2)` slice elements; never build a shell string.** `os/exec` "intentionally does not invoke the system shell and does not expand any glob patterns or handle other expansions, pipelines, or redirections" (the package doc) — so a separate-args call treats input as data, not code. The injection vector is reintroduced the moment you do `exec.Command("sh", "-c", userString)`; don't.
+- **Keep the program name fixed, never user-controlled.** gosec G204 maps to CWE-78 (OS command injection) and fires on dynamic command construction; the program being run must be a constant or a vetted allowlist entry. Guard against the related argument-injection class (CWE-88) — an untrusted value read as a `git`/`go` flag — by validating arguments and `--`-terminating options so a value can't be read as an option.
+- **Rely on the `os/exec` hardening (available since a recent Go) and don't defeat it.** `LookPath`/`Command` refuse to resolve a program via a path entry relative to the current directory and return an error satisfying `errors.Is(err, exec.ErrDot)` (the package doc; go.dev/blog/path-security) — this blocks current-directory executable hijacking when running in a working directory with untrusted contents. To run a binary from the working dir intentionally, write `exec.Command("./prog")` explicitly.
+- **Use `exec.CommandContext` with a timeout on every subprocess** so a hung external tool can't wedge the caller (CWE-400, resource exhaustion). (`go-concurrency.md`.)
+
+## Path traversal and the filesystem (gosec G304/G305/G303/G301/G302/G306/G307/G122/G110; G703 taint)
+
+- **For an externally-supplied filename under a base directory, use `os.Root` / `os.OpenInRoot`, not `filepath.Join` + `os.Open`.** `os.Root` (available since a recent Go; go.dev/blog/osroot) confines every operation to the directory, rejecting `".."` components and symlinks that escape — the fix for gosec G304 (file path as taint input, CWE-22) and G305 (zip/archive extraction traversal, "zip slip"). The blog's rule of thumb: code that joins a fixed dir with an external filename "should probably use `os.Root` instead."
+- **Where the attacker can't touch the filesystem, still validate with `filepath.IsLocal` and normalize with `filepath.Localize`** (both available since a recent Go) — `IsLocal` rejects absolute paths, empty paths, `".."` escapes, and Windows reserved names before you use the path.
+- **Create temp files with `os.CreateTemp`/`os.MkdirTemp`, never a predictable hand-built path.** gosec G303 (CWE-377, insecure temp file) flags a predictable temp path — a symlink-swap race. `os.CreateTemp` picks an unpredictable name and opens with `O_EXCL`.
+- **Set least-privilege permissions on created files and dirs.** gosec flags world/group-writable modes: G301 (dir perms), G302 (file perms / `chmod`), G306 (`WriteFile` perms), G307 (`os.Create` perms) — all CWE-276 (incorrect default permissions). Use `0o600` for secret-bearing files, `0o700` for private dirs; never `0o777`.
+- **Bound decompression with `io.CopyN`, not `io.Copy`** — gosec G110 (CWE-409, decompression bomb): an unbounded `io.Copy` from a compressed reader is a memory-exhaustion DoS. Cap the byte count.
+- **Be aware of the `filepath.Walk`/`WalkDir` callback TOCTOU window** — gosec G122 (CWE-367): a path checked in the callback can change before you act on it; prefer `os.Root`-relative operations that resolve atomically.
+
+## Untrusted input, injection, and resource bounds
+
+- **Build SQL with parameter placeholders (`?`, `$1`) passed as `db.Query`/`db.Exec` args; never `fmt.Sprintf` the query.** The Go database guide (go.dev/doc/database/sql-injection) is explicit: placeholders send statement and values separately, defeating SQL injection (gosec G201 format-string / G202 concatenation, CWE-89; G701 taint). `db.Query(fmt.Sprintf("... id = %s", id))` is the named anti-pattern.
+- **Render HTML with `html/template`, never `text/template`.** `html/template` does contextual auto-escaping (HTML, JS, CSS, URI contexts); `text/template` does no escaping and is unsafe for HTML output (gosec G203 unescaped data / G705 XSS taint, CWE-79 — the #1 weakness in the 2024 CWE Top 25). Don't wrap untrusted data in `template.HTML`/`template.JS` to bypass the escaper.
+- **Sanitize untrusted strings before logging them** — gosec G706 (CWE-117, log injection): a newline/control char in attacker-controlled text can forge log lines. This includes external-tool stdout and model output you log.
+- **Bound every decode of untrusted JSON/stdout from external tools, into a typed struct.** Cap the read with `io.LimitReader` and reject oversized input before parsing (CWE-400), and decode with `json.Decoder.DisallowUnknownFields()` into a typed struct rather than ranging over `map[string]any` — the struct is the parse boundary and unexpected fields are rejected, not silently absorbed (`go-types.md`). This is the same discipline `go-llm.md` applies at the schema: bound `maxItems`/`maxLength` so output can't grow without limit; here it's the *input* side of the same boundary.
+- **Treat model output as untrusted input, not trusted data.** Validate it against the typed schema at the boundary and feed sanitized, secret-free errors back (`go-llm.md`); never interpolate model output into a shell command, a SQL string, a file path, or an HTML template without the defenses above.
+- **Set `ReadHeaderTimeout` / server timeouts and a `ParseMultipartForm` bound on any HTTP server** — gosec G112 (CWE-400 missing `ReadHeaderTimeout`), G114 (`net/http.Serve` with no timeouts), G120 (unbounded `ParseMultipartForm`). Not every program runs an HTTP server, but the rule is general.
+
+## Integer overflow conversions (gosec G115 / CWE-190)
+
+- **Range-check before narrowing an integer conversion.** gosec G115 (CWE-190, integer overflow or wraparound) flags conversions like `int` → `int32`/`int16` and `strconv.Atoi`'s `int` result narrowed to a smaller type — `int` is 64-bit on 64-bit platforms, so the high bits are silently dropped and a large value can wrap negative. Verify the value fits the target range before converting, or use a checked-conversion helper; out-of-bounds write via a wrapped length/index is #2 in the 2024 CWE Top 25.
+- **Validate the result of `strconv.Atoi` and bound it** before using it as a size, index, or length — an unchecked parsed length is both an overflow (G115) and a slice-bounds risk (G602, CWE-118).
+
+## Cryptography and secrets (gosec G101/G401–G407/G501–G507/G402/G403)
+
+- **Use `crypto/rand`, never `math/rand`, for keys, tokens, nonces, salts, or session IDs.** gosec G404 (CWE-338, weak PRNG): `crypto/rand` "implements a cryptographically secure random number generator" (the package doc) — `crypto/rand.Read` for raw bytes, `crypto/rand.Text` (available since a recent Go) for a ≥128-bit token string. `math/rand` is deterministic and predictable.
+- **Compare secrets, MACs, and tokens with `crypto/subtle.ConstantTimeCompare`, never `==` or `bytes.Equal`.** The doc: it runs in time independent of contents, closing the timing side channel that `==`/`bytes.Equal` open by short-circuiting on the first differing byte.
+- **Don't use MD5, SHA-1, DES, RC4, MD4, or RIPEMD-160.** gosec G401 (MD5/SHA-1, CWE-328 weak hash), G405 (DES/RC4, CWE-327 broken algorithm), G406 (MD4/RIPEMD-160, CWE-328), with the import-blocklist mirror rules G501–G507 banning `crypto/md5`, `crypto/des`, `crypto/rc4`, `crypto/sha1`, `net/http/cgi`, `golang.org/x/crypto/md4`, `golang.org/x/crypto/ripemd160`. Use SHA-256+ for hashing and AES-GCM for symmetric encryption.
+- **Never reuse a hardcoded IV/nonce; generate it fresh per message from `crypto/rand`.** gosec G407 (CWE-1204, weak IV). For AES-GCM use a unique 12-byte nonce per encryption.
+- **Keep RSA keys ≥2048 bits.** gosec G403 (CWE-310). Prefer ECDSA/Ed25519 for new code.
+- **Never hardcode credentials, keys, or tokens in source.** gosec G101 (CWE-798, hardcoded credentials — in the 2024 CWE Top 25); load secrets from the environment or an injected config/secrets provider, and keep them out of error strings and logs (`go-errors.md`). gosec G117 (CWE-499) additionally flags secrets leaking via JSON/YAML/XML marshaling — tag secret fields `json:"-"`.
+- **Store passwords only with a salted, memory-hard KDF.** `golang.org/x/crypto/argon2` (Argon2id, the OWASP baseline), or `scrypt`/`bcrypt`; a plain hash, even SHA-256, is far too fast to resist offline cracking (CWE-916, use of a one-way hash without a computational effort; OWASP Password Storage Cheat Sheet).
+
+## TLS and transport (gosec G402/G123/G119/G106/G408)
+
+- **Never set `InsecureSkipVerify: true` in `tls.Config` in production paths.** gosec G402 ("Look for bad TLS connection settings", CWE-295 improper certificate validation) — it disables the certificate check entirely, defeating TLS. Set an explicit `MinVersion` (`tls.VersionTLS12` or higher); G402 also flags an unset/too-low minimum version.
+- **Set `VerifyConnection` when you customize TLS verification, and don't forward auth headers across a redirect.** gosec G123 ("TLS resumption may bypass `VerifyPeerCertificate` when `VerifyConnection` is unset") — a resumed session can skip a `VerifyPeerCertificate` callback; G119 ("Unsafe redirect policy may propagate sensitive headers") flags a redirect policy that forwards sensitive headers cross-host.
+- **Never use `ssh.InsecureIgnoreHostKey`.** gosec G106 ("Audit the use of `ssh.InsecureIgnoreHostKey` function", CWE-322): it accepts any host key, enabling a man-in-the-middle on the SSH connection. Pin the expected host key. gosec G408 ("Stateful misuse of `ssh.PublicKeyCallback` leading to auth bypass") flags a `PublicKeyCallback` that carries auth state incorrectly — it is an SSH auth rule, not a TLS one.
+
+## Language- and runtime-safety checks (gosec G103/G104/G601/G602/G102/G108/G111)
+
+- **Avoid `unsafe` and `reflect`-driven memory tricks unless you've justified them.** gosec G103 (CWE-242, `unsafe` block) flags any `unsafe` usage for audit — it bypasses Go's memory and type safety.
+- **Handle every error; never `_`-drop one.** gosec G104 (CWE-703, unchecked error) — a swallowed error from a `Write`, `Close`, or crypto op hides a failure, and a strict lint gate forbids new swallowed errors. (`go-errors.md`.)
+- **Index and slice with bounds you've validated.** gosec G602 (CWE-118, slice bounds out of range): a length/offset derived from untrusted input must be range-checked before it indexes a slice. On older toolchains (before the loop-variable semantics change), G601 (CWE-118) flags taking the address of a loop variable in `range` (the older aliasing footgun).
+- **Don't bind a listener to all interfaces or expose `net/http/pprof` by accident.** gosec G102 (CWE-200, bind to `0.0.0.0`) and G108 (CWE-200, profiling endpoint auto-exposed by importing `net/http/pprof`) — both leak information or surface to the network unintentionally.
+
+## The G7xx taint-analysis rules (newer gosec)
+
+- **The G7xx family is gosec's data-flow (taint) analysis** tracing untrusted input to a dangerous sink, complementing the pattern-match G1xx–G6xx rules: G701 SQL injection (CWE-89), G702 command injection (CWE-78), G703 path traversal (CWE-22), G704 SSRF (CWE-918), G705 XSS (CWE-79), G706 log injection (CWE-117), G710 open redirect (CWE-601) — these CWE pairings are from gosec's own `ruleToCWE` map — plus the newer G707 SMTP/header (CRLF) injection, G708 server-side template injection via `text/template`, and G709 unsafe deserialization. The defense is the same per class as above — the fix is at the sink (parameterize, confine to `os.Root`, escape, allowlist the redirect/host), and the taint rule just proves the untrusted source reaches it. Validate the URL host against an allowlist before any outbound request, and check the *resolved IP* in `Transport.DialContext`, not the hostname, to close the DNS-rebinding window — rejecting loopback, link-local, and cloud-metadata ranges (SSRF / G704, CWE-918).

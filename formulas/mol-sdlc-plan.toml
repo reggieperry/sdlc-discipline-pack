@@ -140,7 +140,7 @@ worktree.**
 
 Gas City's overlay mechanism materializes pack-shipped `overlay/per-provider/<provider>/.claude/` files into the agent's session-spawn working directory (`AGENT_WORK_DIR`). When this formula step creates a separate per-bead worktree and `cd`s into it, those overlay files do not automatically propagate — they live in the agent's pre-spawn work_dir, which is a sibling path. Without propagation, Claude Code's `.claude/rules/` auto-load fails to fire from the per-bead worktree on rigs that don't track their own `.claude/` content.
 
-The propagation is conditional: rig-tracked files (e.g., a rig that ships its own `.claude/rules/python.md`) are preserved; only files absent from the per-bead worktree are populated from the overlay. The rig wins on filename collision.
+The propagation is conditional: rig-tracked files (e.g., a rig that ships its own `.claude/rules/python-style.md`) are preserved; only files absent from the per-bead worktree are populated from the overlay. The rig wins on filename collision.
 
 ```bash
 AGENT_WORK_DIR="${GC_WORK_DIR:-$(pwd)/..}"
