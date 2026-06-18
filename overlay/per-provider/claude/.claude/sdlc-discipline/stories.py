@@ -229,6 +229,30 @@ def load_all_stories(stories_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
+def archived_story_ids(stories_dir: Path) -> set[str]:
+    """Story IDs of specs already moved to stories/_archive/ (closed/merged).
+
+    cmd_validate resolves deps against these as well as the active story_ids, so
+    a dependency on a merged predecessor — one `stories.py archive` has moved to
+    _archive/ — does not register as a dangling-dep error. The archived specs
+    are not re-validated; only their IDs are collected.
+    """
+    archive_dir = stories_dir / ARCHIVE_DIRNAME
+    out: set[str] = set()
+    if not archive_dir.is_dir():
+        return out
+    for path in sorted(archive_dir.glob("*.md")):
+        if path.name.startswith("_") or path.name == "README.md":
+            continue
+        if not STORY_FILENAME_RE.match(path.name):
+            continue
+        fm, _ = parse_frontmatter(path)
+        sid = fm.get("story_id")
+        if sid:
+            out.add(str(sid))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # validate
 # ---------------------------------------------------------------------------
@@ -240,6 +264,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
     stories = load_all_stories(stories_dir)
     sensitive_canonical = find_sensitive_files_list(rig_root)
     by_id = {s["story_id"]: s for s in stories}
+    # A dep can point at a merged predecessor already moved to _archive/; resolve
+    # against active + archived IDs so it does not read as a dangling dep.
+    known_ids = set(by_id) | archived_story_ids(stories_dir)
     errors: list[str] = []
 
     # Schema + status
@@ -260,7 +287,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     for s in stories:
         deps = s.get("deps") or []
         for dep in deps:
-            if dep not in by_id:
+            if dep not in known_ids:
                 errors.append(f"{s['__path'].name}: dep '{dep}' does not match any story_id")
 
     # Sensitive-files cross-check
