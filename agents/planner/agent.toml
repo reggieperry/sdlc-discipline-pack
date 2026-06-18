@@ -7,7 +7,13 @@ nudge = "Run gc hook; check assigned work and routed pool work, then follow mol-
 pre_start = ["{{.ConfigDir}}/assets/scripts/worktree-setup.sh {{.RigRoot}} {{.WorkDir}} {{.AgentBase}}"]
 idle_timeout = "1h"
 min_active_sessions = 0
-max_active_sessions = 2
+# Bumped 2->3 (2026-06-18): the planner is the chain's intake gate and the
+# measured bottleneck. Per-bead phase durations across post-split beads:
+# planner median 16m vs worker 34m (worker ~2.2x), so planner+documenter (both
+# ~2 slots) had the lowest throughput, not the worker. 2->3 lifts the intake
+# gate toward the worker's capacity without shrinking the slow stage. Staged:
+# documenter 2->3 is the follow-on; watch for Anthropic throttle between steps.
+max_active_sessions = 3
 # Pinned 2026-06-12 (supersedes the v2.41.0 deliberate-unpin): the unpinned state was the
 # model-A/B lever, but the A/B halted on the incumbent's (claude-fable-5) expected sunset —
 # pin to latest Opus so phases never ride an unstated host default. Re-pin per-phase if a
