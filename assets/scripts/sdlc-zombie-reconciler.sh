@@ -321,6 +321,30 @@ PYEOF
                 bd -C "$rig_root" update "$bead_id" --set-metadata final_state=merged \
                     >/dev/null 2>&1 || \
                     echo "zombie-reconciler: rig=$rig bd update $bead_id final_state=merged FAILED (non-fatal)" >&2
+
+                # issue #243: close the merged-but-blocked zombie. A bead whose
+                # PR merged but whose status is still `blocked` is unambiguously
+                # done — it was parked (requires_human_decision) and the merge IS
+                # the human decision, but nothing flips it to closed, so it gates
+                # its downstream deps indefinitely (el-az1chd / EL-274 sat blocked
+                # 17h after PR #738 merged). Close it ONLY when the live status is
+                # `blocked`: an `in_progress` bead is an active re-walk and an
+                # `open` bead may be queued for re-walk — closing either would
+                # interrupt live work. Guard on `blocked` alone (NOT on
+                # requires_human_decision): the headline zombie carries
+                # requires_human_decision=true, so requiring it unset would skip
+                # the very bead this closes. Best-effort — a failure here does not
+                # roll back the archive.
+                local cur_status
+                cur_status=$(bd -C "$rig_root" show "$bead_id" --json 2>/dev/null \
+                    | jq -r '.[0].status // empty' 2>/dev/null || echo "")
+                if [ "$cur_status" = "blocked" ]; then
+                    if bd -C "$rig_root" update "$bead_id" --status=closed >/dev/null 2>&1; then
+                        echo "zombie-reconciler: rig=$rig closed merged-but-blocked zombie $bead_id (pr=$pr_url)" >&2
+                    else
+                        echo "zombie-reconciler: rig=$rig bd update $bead_id --status=closed FAILED (non-fatal)" >&2
+                    fi
+                fi
             fi
         else
             archive_failed=$((archive_failed + 1))

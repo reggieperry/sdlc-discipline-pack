@@ -171,11 +171,11 @@ bounce again. Park it for a human instead:
 
 ```bash
 REASON="plan still missing after a planner bounce (implement_blocked was already set)"
-bd update {{story_id}} \\
+bd update {{story_id}} --status=blocked --assignee "" \\
   --set-metadata requires_human_decision=true \\
   --set-metadata "human_decision_reason=$REASON" \\
   --set-metadata "gc.routed_to=" \\
-  --status=escalated --append-notes "workspace-resume blocked: $REASON"
+  --append-notes "workspace-resume blocked: $REASON"
 WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
 gc mail send "$WITNESS_TARGET" -s "ESCALATION: {{story_id}} — plan missing after planner bounce [HIGH]" \\
   -m "workspace-resume found no committed plan for {{story_id}} after a prior plan_missing bounce. Branch: ${BRANCH:-unset}. Human decision needed."

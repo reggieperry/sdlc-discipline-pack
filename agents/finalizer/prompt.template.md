@@ -63,7 +63,11 @@ if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
     git checkout --track -B "$BRANCH" "origin/$BRANCH"
 else
     echo "finalizer: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
-    bd update $STORY_ID --status=escalated --notes "finalize blocked: branch not on remote"
+    bd update $STORY_ID --status=blocked --assignee "" \
+      --set-metadata requires_human_decision=true \
+      --set-metadata "human_decision_reason=branch $BRANCH not on remote at finalize" \
+      --set-metadata "gc.routed_to=" \
+      --notes "finalize blocked: branch not on remote"
     gc runtime drain-ack
     exit
 fi
@@ -104,11 +108,15 @@ if [ $REBASE_RC -ne 0 ]; then
 
     if [ "$BOUNCE_COUNT" -ge "$MAX_BOUNCES" ]; then
         # Exhausted the bounce budget — fall back to today's escalation.
-        bd update $STORY_ID \
+        bd update $STORY_ID --status=blocked --assignee "" \
           --set-metadata refresh_status="conflict" \
           --set-metadata "merge_failure_count=$BOUNCE_COUNT" \
+          --set-metadata "merge_failure_files=$CONFLICT_FILES" \
           --set-metadata "refresh_failure_summary=exhausted $MAX_BOUNCES rebase attempts; conflicts in: $CONFLICT_FILES" \
-          --status=escalated --notes "finalize blocked: rebase bounce limit reached"
+          --set-metadata requires_human_decision=true \
+          --set-metadata "human_decision_reason=exhausted $MAX_BOUNCES rebase attempts; conflicts in: $CONFLICT_FILES" \
+          --set-metadata "gc.routed_to=" \
+          --notes "finalize blocked: rebase bounce limit reached"
         WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
         gc mail send "$WITNESS_TARGET" -s "ESCALATION: $STORY_ID — rebase bounce limit [HIGH]" \
           -m "Branch: $BRANCH; exhausted rebase attempts. Files: $CONFLICT_FILES"

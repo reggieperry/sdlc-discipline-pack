@@ -3,8 +3,10 @@
 The stuck-alert watcher emails the operator when the pipeline is stranded
 awaiting a human — two triggers:
 
-  1. bounce-exhausted PR: a bead at status=escalated + refresh_status=conflict
-     (the finalizer's at-cap branch — rebase-bounce loop gave up).
+  1. bounce-exhausted PR: a bead at status=blocked + refresh_status=conflict
+     (the finalizer's at-cap branch — rebase-bounce loop gave up). Re-keyed
+     from status=escalated in issue #243 (bd rejected escalated atomically;
+     the park lands as blocked).
   2. blocked-for-decision bead: status=blocked + a human_decision_reason
      (a worker escalated a spec/architecture call only the operator can make).
 
@@ -75,22 +77,33 @@ def _spy_notify_recording(fakes_dir: Path) -> Path:
     return path
 
 
-def _escalated_conflict_bead(
+def _bounce_conflict_bead(
     bead_id: str,
     files: str = "tests/unit/test_slop_analysis.py",
     alerted: bool = False,
 ) -> dict:
-    """Trigger 1: bounce-exhausted (finalizer at-cap branch)."""
+    """Trigger 1: bounce-exhausted (finalizer at-cap branch).
+
+    Issue #243: the finalizer's at-cap park now lands as `status=blocked`
+    (bd rejected the old `status=escalated` atomically), carrying
+    `refresh_status=conflict` AND the human-decision park markers. The
+    detector keys the bounce trigger on `status=blocked + refresh_status=
+    conflict` and must check it BEFORE the generic blocked-for-decision
+    trigger, so a bounce bead is categorized as bounce-exhausted (remediation:
+    rebase + merge the collision files) rather than blocked-for-decision.
+    """
     meta = {
         "refresh_status": "conflict",
         "merge_failure_count": "3",
         "merge_failure_files": files,
         "merge_failure_at": "2026-05-31T12:00:00Z",
-        "gc.routed_to": "test-rig/sdlc-discipline.worker",
+        "requires_human_decision": "true",
+        "human_decision_reason": "exhausted 3 rebase attempts; conflicts in: " + files,
+        "gc.routed_to": "",
     }
     if alerted:
         meta["stuck_alerted_at"] = "2026-05-31T12:05:00Z"
-    return {"id": bead_id, "status": "escalated", "metadata": meta}
+    return {"id": bead_id, "status": "blocked", "metadata": meta}
 
 
 def _blocked_bead(
@@ -219,14 +232,17 @@ class BlockedForDecisionTests(unittest.TestCase):
 
 
 class BounceExhaustedTests(unittest.TestCase):
-    def test_escalated_conflict_alerts_and_stamps(self) -> None:
+    def test_blocked_conflict_alerts_and_stamps(self) -> None:
+        """Issue #243: the re-keyed bounce trigger fires on `status=blocked +
+        refresh_status=conflict` (the shape bd actually accepts) and reports it
+        as bounce-exhausted, not blocked-for-decision."""
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
             spy_bd_list(
                 fakes_dir,
-                list_response=json.dumps([_escalated_conflict_bead("el-cf", files="a/b.py")]),
+                list_response=json.dumps([_bounce_conflict_bead("el-cf", files="a/b.py")]),
             )
             _spy_notify_recording(fakes_dir)
 
@@ -237,16 +253,23 @@ class BounceExhaustedTests(unittest.TestCase):
             body = _notify_body(fakes_dir)
             self.assertIn("el-cf", body, "digest body must name the bounce-exhausted bead")
             self.assertIn("a/b.py", body, "digest must carry the collision file(s)")
+            self.assertIn(
+                "bounce-exhausted",
+                body,
+                "a conflict bead must be categorized as bounce-exhausted, not blocked-for-decision",
+            )
+            # Deduped under the bounce stamp, not the blocked-for-decision stamp.
             stamps = [c for c in _bd_calls(fakes_dir) if "el-cf" in c and "stuck_alerted_at" in c]
             self.assertEqual(len(stamps), 1, "must stamp stuck_alerted_at exactly once")
 
-    def test_escalated_without_conflict_does_not_alert(self) -> None:
-        """status=escalated alone (e.g. a non-rebase block) is NOT the
-        bounce-exhausted trigger — only escalated + refresh_status=conflict."""
+    def test_blocked_without_conflict_is_not_bounce(self) -> None:
+        """A blocked bead WITHOUT refresh_status=conflict and WITHOUT a
+        human_decision_reason is neither trigger — it is bare/crash-residue
+        blocked, which the alerter deliberately does not chase."""
         with TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
-            bead = {"id": "el-esc", "status": "escalated", "metadata": {"gc.routed_to": "x"}}
+            bead = {"id": "el-bare", "status": "blocked", "metadata": {"gc.routed_to": "x"}}
             spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
             spy_bd_list(fakes_dir, list_response=json.dumps([bead]))
             _spy_notify_recording(fakes_dir)
@@ -255,7 +278,48 @@ class BounceExhaustedTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
             self.assertEqual(
-                _notify_subjects(fakes_dir), [], "escalated without conflict → no alert"
+                _notify_subjects(fakes_dir), [], "bare blocked (no markers) → no alert"
+            )
+
+    def test_conflict_bead_categorized_as_bounce_not_blocked(self) -> None:
+        """Ordering guard: the finalizer at-cap park carries BOTH
+        refresh_status=conflict AND human_decision_reason. The bounce trigger
+        (more specific) must be evaluated first so the bead is reported as
+        bounce-exhausted with the collision-file remediation, never folded into
+        the generic blocked-for-decision category."""
+        with TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            city_root, rig_root, fakes_dir = _setup_rig(tmp)
+            spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+            spy_bd_list(
+                fakes_dir,
+                list_response=json.dumps([_bounce_conflict_bead("el-cf", files="x/y.py")]),
+            )
+            _spy_notify_recording(fakes_dir)
+
+            result = _invoke(fakes_dir, city_root)
+
+            self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+            body = _notify_body(fakes_dir)
+            # The bead must be listed under the bounce-exhausted category line,
+            # never under a [blocked-for-decision] entry. (The digest footer
+            # always names "blocked-for-decision" in its remediation guidance,
+            # so assert on the bead's category MARKER, not the raw body.)
+            self.assertIn("[bounce-exhausted] el-cf", body)
+            self.assertIn("x/y.py", body, "bounce remediation must name the collision files")
+            self.assertNotIn(
+                "[blocked-for-decision] el-cf",
+                body,
+                "a conflict bead must not also surface as blocked-for-decision",
+            )
+            # Deduped via the bounce stamp, not the blocked stamp.
+            self.assertTrue(
+                any("stuck_alerted_at" in c for c in _bd_calls(fakes_dir)),
+                "bounce bead must dedup via stuck_alerted_at",
+            )
+            self.assertFalse(
+                any("blocked_alerted_at" in c for c in _bd_calls(fakes_dir)),
+                "a bounce bead must NOT be stamped with blocked_alerted_at",
             )
 
     def test_already_alerted_bounce_is_deduped(self) -> None:
@@ -265,7 +329,7 @@ class BounceExhaustedTests(unittest.TestCase):
             spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
             spy_bd_list(
                 fakes_dir,
-                list_response=json.dumps([_escalated_conflict_bead("el-cf", alerted=True)]),
+                list_response=json.dumps([_bounce_conflict_bead("el-cf", alerted=True)]),
             )
             _spy_notify_recording(fakes_dir)
 
@@ -284,7 +348,7 @@ class CombinedDigestTests(unittest.TestCase):
             city_root, rig_root, fakes_dir = _setup_rig(tmp)
             beads = [
                 _blocked_bead("el-blk"),
-                _escalated_conflict_bead("el-cf"),
+                _bounce_conflict_bead("el-cf"),
                 _running_bead("el-ok"),
             ]
             spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))

@@ -59,8 +59,12 @@ if ! git remote get-url origin >/dev/null 2>&1; then
         git checkout "$BRANCH"
         bd update $STORY_ID --set-metadata documenter.no_remote_configured="true"
     else
-        bd update $STORY_ID --set-metadata documenter.no_remote_configured="true" \
-          --status=escalated --notes "documentation blocked: branch $BRANCH not present locally and no origin remote"
+        bd update $STORY_ID --status=blocked --assignee "" \
+          --set-metadata documenter.no_remote_configured="true" \
+          --set-metadata requires_human_decision=true \
+          --set-metadata "human_decision_reason=branch $BRANCH not present locally and no origin remote" \
+          --set-metadata "gc.routed_to=" \
+          --notes "documentation blocked: branch $BRANCH not present locally and no origin remote"
         gc runtime drain-ack
         exit
     fi
@@ -70,7 +74,11 @@ else
         git checkout --track -B "$BRANCH" "origin/$BRANCH"
     else
         echo "documenter: expected metadata.branch=$BRANCH on remote, but it is missing" >&2
-        bd update $STORY_ID --status=escalated --notes "documentation blocked: branch not on remote"
+        bd update $STORY_ID --status=blocked --assignee "" \
+          --set-metadata requires_human_decision=true \
+          --set-metadata "human_decision_reason=branch $BRANCH not on remote at documentation" \
+          --set-metadata "gc.routed_to=" \
+          --notes "documentation blocked: branch not on remote"
         gc runtime drain-ack
         exit
     fi

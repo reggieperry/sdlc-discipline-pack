@@ -25,6 +25,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from _spies import (
+    spy_bd_dispatch,
     spy_bd_list,
     spy_gc_rig_list,
     spy_gh_pr_list,
@@ -753,6 +754,127 @@ class ArchiveCommitTests(unittest.TestCase):
                 self._git(rig_root, "rev-parse", "origin/main"),
                 "archive commit must be pushed to origin",
             )
+
+
+class BlockedZombieCloserTests(unittest.TestCase):
+    """Issue #243 — the reconciler must CLOSE a merged-but-blocked zombie.
+
+    Root cause: a chain phase parks a bead with the invalid `--status=escalated`
+    (bd rejects it atomically), the LLM retries with bare `--status=blocked`, and
+    once the PR merges externally nothing flips that `blocked` bead to `closed`.
+    The reconciler stamps `final_state=merged` but left status untouched, so the
+    bead gated its downstream deps indefinitely (el-az1chd / EL-274 sat blocked
+    17h after PR #738 merged).
+
+    Fix: when a HIGH-confidence merge signal hits AND the bead's current status
+    is `blocked` (the unambiguous zombie shape — a parked bead whose PR merged),
+    additionally `bd update <bead> --status=closed`. A bead at `in_progress`
+    (active re-walk) or `open` (possibly queued for re-walk) is NOT closed —
+    closing those would interrupt live work.
+
+    These tests drive detection through Signal 2 (PR branch match against
+    `filed_as_bead`), the path that actually carries the zombie shape: the bead
+    is NOT in the closed-bead list, so its live status is read via `bd show`.
+    The fake (`spy_bd_dispatch`) answers `bd show <id> --json` with a
+    configurable status so the guard can be exercised.
+    """
+
+    @staticmethod
+    def _bead_show_json(bead_id: str, status: str) -> str:
+        return json.dumps(
+            [
+                {
+                    "id": bead_id,
+                    "status": status,
+                    "metadata": {"story_id": "EL-243", "final_state": "pr_open_for_human"},
+                }
+            ]
+        )
+
+    def _run(self, bead_status: str) -> tuple[subprocess.CompletedProcess, Path]:
+        """Stand up a Signal-2 zombie whose bead reports `bead_status`, run the
+        reconciler, return (result, fakes_dir) for argv-log inspection."""
+        self._ctx = TemporaryDirectory()
+        tmp = Path(self._ctx.name)
+        self.addCleanup(self._ctx.cleanup)
+        city_root, rig_root, fakes_dir = _setup_rig(tmp)
+        bead_id = "el-243bd"
+        _write_spec(rig_root / "stories", "EL-243", status="ready", filed_as_bead=bead_id)
+        prs_json = json.dumps(
+            [
+                {
+                    "number": 738,
+                    "title": "EL-243: merged-but-blocked closer",
+                    "headRefName": f"feature/{bead_id}",
+                    "url": "https://github.com/x/y/pull/738",
+                    "mergeCommit": {"oid": "cafef00d"},
+                    "mergedAt": "2026-06-19T00:00:00Z",
+                }
+            ]
+        )
+        spy_gc_rig_list(fakes_dir, _rig_list_json("test-rig", rig_root))
+        # bd: empty closed-list (forces Signal 2) + a `bd show` that reports the
+        # bead's live status so the closer's guard can read it.
+        spy_bd_dispatch(
+            fakes_dir,
+            {
+                "list": "[]",
+                bead_id: self._bead_show_json(bead_id, bead_status),
+            },
+        )
+        spy_gh_pr_list(fakes_dir, pr_list_response=prs_json)
+        spy_python3_stories_archive(fakes_dir)
+        _setup_fake_pack_with_notify(fakes_dir)
+
+        result = _invoke(fakes_dir, city_root, enabled=True)
+        return result, fakes_dir
+
+    @staticmethod
+    def _close_calls(fakes_dir: Path, bead_id: str) -> list[str]:
+        log = fakes_dir / "bd-argv.log"
+        if not log.exists():
+            return []
+        return [
+            c
+            for c in log.read_text().splitlines()
+            if "update" in c and bead_id in c and "--status=closed" in c
+        ]
+
+    def test_blocked_bead_with_merged_pr_is_closed(self) -> None:
+        result, fakes_dir = self._run(bead_status="blocked")
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        # The archive still fired (load-bearing op).
+        self.assertTrue(
+            (fakes_dir / "stories-archive-argv.log").exists(),
+            "archive must still fire for the zombie spec",
+        )
+        bd_calls = (fakes_dir / "bd-argv.log").read_text()
+        self.assertIn("final_state=merged", bd_calls, "final_state=merged stamp must still happen")
+        self.assertEqual(
+            len(self._close_calls(fakes_dir, "el-243bd")),
+            1,
+            f"a blocked bead with a merged PR must be closed exactly once; bd calls:\n{bd_calls}",
+        )
+
+    def test_in_progress_bead_with_merged_pr_is_not_closed(self) -> None:
+        result, fakes_dir = self._run(bead_status="in_progress")
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        bd_calls = (fakes_dir / "bd-argv.log").read_text()
+        self.assertEqual(
+            self._close_calls(fakes_dir, "el-243bd"),
+            [],
+            f"an in_progress bead (active re-walk) must NOT be closed; bd calls:\n{bd_calls}",
+        )
+
+    def test_open_bead_with_merged_pr_is_not_closed(self) -> None:
+        result, fakes_dir = self._run(bead_status="open")
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        bd_calls = (fakes_dir / "bd-argv.log").read_text()
+        self.assertEqual(
+            self._close_calls(fakes_dir, "el-243bd"),
+            [],
+            f"an open bead (possibly queued for re-walk) must NOT be closed; bd calls:\n{bd_calls}",
+        )
 
 
 if __name__ == "__main__":

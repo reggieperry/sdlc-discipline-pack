@@ -2,9 +2,11 @@
 # sdlc-stuck-alert.sh — pack #212. Email the operator when the Brooklyn
 # pipeline is stranded awaiting a human. Two triggers, one digest:
 #
-#   1. bounce-exhausted PR: status=escalated + refresh_status=conflict —
+#   1. bounce-exhausted PR: status=blocked + refresh_status=conflict —
 #      the finalizer's at-cap branch (the rebase-bounce loop gave up).
-#      Dedup via metadata.stuck_alerted_at.
+#      Dedup via metadata.stuck_alerted_at. (Re-keyed from status=escalated
+#      in issue #243 — bd rejects escalated atomically, so the park lands as
+#      blocked.)
 #   2. blocked-for-decision: status=blocked + a non-empty
 #      metadata.human_decision_reason — a worker escalated a spec/architecture
 #      call only the operator can make. Dedup via metadata.blocked_alerted_at.

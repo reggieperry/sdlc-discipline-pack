@@ -148,7 +148,11 @@ gc mail send "$WITNESS_TARGET" -s "ESCALATION: <brief description> [HIGH]" -m "<
 If escalation does not unblock you, run the done sequence with status `escalated` and exit:
 
 ```bash
-bd update $STORY_ID --status=escalated --notes "Blocked: <reason>"
+bd update $STORY_ID --status=blocked --assignee "" \
+  --set-metadata requires_human_decision=true \
+  --set-metadata "human_decision_reason=<reason>" \
+  --set-metadata "gc.routed_to=" \
+  --notes "Blocked: <reason>"
 gc runtime drain-ack
 exit
 ```
