@@ -27,7 +27,7 @@ scale-check filters `--unassigned`.
 | Situation | Action |
 |-----------|--------|
 | Bounced from worker (`implement_blocked=plan_missing`) | Resume the existing branch; author and commit the missing plan; re-submit. |
-| Blocked on requirements | Mail witness; mark story `escalated`; drain-ack and exit. |
+| Blocked on requirements | Mail witness; park story `blocked` (requires_human_decision); drain-ack and exit. |
 | Context filling | `gc runtime request-restart`; the new session resumes from `metadata.current_step`. |
 | Sensitive file would change | The plan must declare it; the worker's submit step blocks if it changed without declaration. |
 """

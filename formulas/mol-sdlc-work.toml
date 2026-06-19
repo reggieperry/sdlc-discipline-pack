@@ -28,7 +28,7 @@ scale-check filters `--unassigned`.
 | Bounced from tester (red tests) | Resume from existing branch; fix the failure_summary; re-submit. |
 | Bounced from reviewer (blocker) | Resume from existing branch; address rejection_reason; re-submit. |
 | Plan missing on the branch | `workspace-resume` bounces to the planner pool once (`implement_blocked=plan_missing`); a second miss escalates. |
-| Blocked on requirements | Mail witness; mark story `escalated`; drain-ack and exit. |
+| Blocked on requirements | Mail witness; park story `blocked` (requires_human_decision); drain-ack and exit. |
 | Context filling | `gc runtime request-restart`; the new session resumes from `metadata.current_step`. |
 | Sensitive file would change | The plan must declare it; submit step blocks if it changed without declaration. |
 """
