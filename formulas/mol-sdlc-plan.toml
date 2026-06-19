@@ -27,7 +27,7 @@ scale-check filters `--unassigned`.
 | Situation | Action |
 |-----------|--------|
 | Bounced from worker (`implement_blocked=plan_missing`) | Resume the existing branch; author and commit the missing plan; re-submit. |
-| Blocked on requirements | Mail witness; mark story `escalated`; drain-ack and exit. |
+| Blocked on requirements | Mail witness; park story `blocked` (requires_human_decision); drain-ack and exit. |
 | Context filling | `gc runtime request-restart`; the new session resumes from `metadata.current_step`. |
 | Sensitive file would change | The plan must declare it; the worker's submit step blocks if it changed without declaration. |
 """
@@ -296,7 +296,11 @@ If you cannot produce a plan (story is too vague, sensitive-file scope
 unclear), append a note explaining what's needed and escalate to witness:
 
 ```bash
-bd update {{story_id}} --status=escalated --append-notes "cannot plan: <reason>"
+bd update {{story_id}} --status=blocked --assignee "" \\
+  --set-metadata requires_human_decision=true \\
+  --set-metadata "human_decision_reason=cannot plan: <reason>" \\
+  --set-metadata "gc.routed_to=" \\
+  --append-notes "cannot plan: <reason>"
 WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
 gc mail send "$WITNESS_TARGET" -s "ESCALATION: cannot plan {{story_id}} [HIGH]" -m "<details>"
 gc runtime drain-ack

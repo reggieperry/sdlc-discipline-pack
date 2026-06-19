@@ -154,11 +154,11 @@ NEW_BCE=$(jq -nc --argjson pre "$PRE_SIGNALS" --argjson post "$POST_SIGNALS" \
 
 if [ "$NEW_BCE" != "[]" ]; then
     REASON="rebase resolution introduced architectural signals not present pre-rebase: $NEW_BCE"
-    bd update $STORY_ID \
+    bd update $STORY_ID --status=blocked --assignee "" \
       --set-metadata requires_human_decision=true \
       --set-metadata "human_decision_reason=$REASON" \
       --set-metadata "gc.routed_to=" \
-      --status=escalated --notes "rebase blocked: $REASON"
+      --notes "rebase blocked: $REASON"
     WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
     gc mail send "$WITNESS_TARGET" -s "ESCALATION: $STORY_ID — rebase introduced architectural signals [HIGH]" \
       -m "Branch: $BRANCH. New signals: $NEW_BCE. $REASON"
@@ -332,10 +332,14 @@ WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
 gc mail send "$WITNESS_TARGET" -s "ESCALATION: <brief description> [HIGH]" -m "<details>"
 ```
 
-If escalation does not unblock you, run the done sequence with status `escalated` and exit:
+If escalation does not unblock you, run the done sequence with status `blocked` (parked for human decision) and exit:
 
 ```bash
-bd update $STORY_ID --status=escalated --notes "Blocked: <reason>"
+bd update $STORY_ID --status=blocked --assignee "" \
+  --set-metadata requires_human_decision=true \
+  --set-metadata "human_decision_reason=<reason>" \
+  --set-metadata "gc.routed_to=" \
+  --notes "Blocked: <reason>"
 gc runtime drain-ack
 exit
 ```

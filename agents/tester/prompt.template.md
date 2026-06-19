@@ -199,7 +199,11 @@ If the failure is environment-level — missing test fixtures the worker did not
 WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
 gc mail send "$WITNESS_TARGET" -s "ESCALATION: tester {{ basename .AgentName }} cannot validate $STORY_ID [HIGH]" \
   -m "Reason: <missing fixture / broken lockfile / unreachable resource>"
-bd update $STORY_ID --status=escalated --notes "test blocked: <reason>"
+bd update $STORY_ID --status=blocked --assignee "" \
+  --set-metadata requires_human_decision=true \
+  --set-metadata "human_decision_reason=<reason>" \
+  --set-metadata "gc.routed_to=" \
+  --notes "test blocked: <reason>"
 gc runtime drain-ack
 exit
 ```

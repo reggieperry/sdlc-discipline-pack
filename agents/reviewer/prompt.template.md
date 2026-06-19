@@ -58,8 +58,12 @@ if ! git remote get-url origin >/dev/null 2>&1; then
         git checkout "$BRANCH"
         bd update $STORY_ID --set-metadata reviewer.no_remote_configured="true"
     else
-        bd update $STORY_ID --set-metadata reviewer.no_remote_configured="true" \
-          --status=escalated --notes "review blocked: branch $BRANCH not present locally and no origin remote"
+        bd update $STORY_ID --status=blocked --assignee "" \
+          --set-metadata reviewer.no_remote_configured="true" \
+          --set-metadata requires_human_decision=true \
+          --set-metadata "human_decision_reason=branch $BRANCH not present locally and no origin remote" \
+          --set-metadata "gc.routed_to=" \
+          --notes "review blocked: branch $BRANCH not present locally and no origin remote"
         gc runtime drain-ack
         exit
     fi
@@ -358,7 +362,11 @@ If the bead arrives without `metadata.branch` or with a missing plan file, do no
 WITNESS_TARGET="${GC_RIG:+$GC_RIG/}witness"
 gc mail send "$WITNESS_TARGET" -s "ESCALATION: review {{ basename .AgentName }} cannot inspect $STORY_ID [HIGH]" \
   -m "Reason: <missing branch / missing plan / unreadable diff>"
-bd update $STORY_ID --status=escalated --notes "review blocked: <reason>"
+bd update $STORY_ID --status=blocked --assignee "" \
+  --set-metadata requires_human_decision=true \
+  --set-metadata "human_decision_reason=<reason>" \
+  --set-metadata "gc.routed_to=" \
+  --notes "review blocked: <reason>"
 gc runtime drain-ack
 exit
 ```
