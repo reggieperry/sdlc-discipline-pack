@@ -164,6 +164,11 @@ def _run_sweep(
         "GC_CITY_ROOT": str(tmp / "city"),
         "SDLC_COST_ROLLUP_PER_BEAD_PATH": str(writer),
         "SDLC_COST_ROLLUP_RIG_LISTER": str(lister),
+        # Pin the recency window off by default so these tests are deterministic
+        # regardless of when they run (the script otherwise defaults SINCE to
+        # 30 days ago). The window itself is exercised by the dedicated tests
+        # below, which override this via env_extra.
+        "SDLC_COST_ROLLUP_SINCE": "2000-01-01",
     }
     if env_extra:
         env.update(env_extra)
@@ -267,6 +272,60 @@ class SweepIdempotencyTests(unittest.TestCase):
             self._invocations(),
             ["el-test4|elder"],
             msg="wisp bead should have been filtered; only el-test4 should be processed",
+        )
+
+
+class CostRollupLimitAndWindowTests(unittest.TestCase):
+    """Bug fixes (2026-06-19): the closed-bead query must pass --limit (without
+    it the default 50 rows are all order-wisps, so story beads never surface —
+    the silent stall from ~2026-06-11), and the sweep must honor a recency
+    window so it bounds candidates instead of reprocessing every historical
+    closed bead each run."""
+
+    def setUp(self) -> None:
+        self._tmpdir_ctx = TemporaryDirectory()
+        self._tmp = Path(self._tmpdir_ctx.name)
+        (self._tmp / "city").mkdir()
+        (self._tmp / "city" / "city.toml").write_text("[city]\n")
+
+    def tearDown(self) -> None:
+        self._tmpdir_ctx.cleanup()
+
+    def _invocations(self) -> list[str]:
+        log = self._tmp / "writer-invocations.log"
+        return log.read_text().strip().splitlines() if log.exists() else []
+
+    def test_list_query_passes_high_limit(self) -> None:
+        bead = _bead("el-lim1", story_id="EL-901")
+        gc = _make_gc_fake(self._tmp, "elder", str(self._tmp / "rig"), [bead])
+        writer = _make_writer_fake(self._tmp, self._tmp / "city" / "cost_history.csv")
+        lister = _make_rig_lister_fake(self._tmp, "elder", str(self._tmp / "rig"))
+
+        result = _run_sweep(self._tmp, gc, writer, lister)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argv = (self._tmp / "gc-argv.log").read_text()
+        list_lines = [ln for ln in argv.splitlines() if "list" in ln and "--status=closed" in ln]
+        self.assertTrue(list_lines, msg=f"no closed-bead list call in gc argv: {argv!r}")
+        self.assertTrue(
+            all("--limit" in ln for ln in list_lines),
+            msg=f"closed-bead list call must pass --limit (50-default+wisp stall); got {list_lines!r}",
+        )
+
+    def test_recency_window_skips_old_bead(self) -> None:
+        old = _bead("el-old", story_id="EL-OLD", closed_at="2026-01-01T00:00:00Z")
+        recent = _bead("el-new", story_id="EL-NEW", closed_at="2026-06-15T00:00:00Z")
+        gc = _make_gc_fake(self._tmp, "elder", str(self._tmp / "rig"), [old, recent])
+        writer = _make_writer_fake(self._tmp, self._tmp / "city" / "cost_history.csv")
+        lister = _make_rig_lister_fake(self._tmp, "elder", str(self._tmp / "rig"))
+
+        result = _run_sweep(
+            self._tmp, gc, writer, lister, env_extra={"SDLC_COST_ROLLUP_SINCE": "2026-06-01"}
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(
+            self._invocations(),
+            ["el-new|elder"],
+            msg="only the bead closed on/after SINCE should be processed",
         )
 
 

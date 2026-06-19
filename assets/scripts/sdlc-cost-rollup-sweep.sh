@@ -75,7 +75,11 @@ if [ -f "$CSV" ]; then
     done < "$CSV"
 fi
 
-SINCE="${SDLC_COST_ROLLUP_SINCE:-}"
+# Default to a recency window when SINCE is unset, so the sweep bounds its
+# candidates to recently-closed beads instead of walking every historical
+# closed bead each run (the CSV KNOWN_PAIRS dedupe still skips already-recorded
+# pairs; the window just caps how far back an un-recorded bead is reconsidered).
+SINCE="${SDLC_COST_ROLLUP_SINCE:-$(date -d "${SDLC_COST_ROLLUP_WINDOW_DAYS:-30} days ago" +%Y-%m-%d 2>/dev/null || true)}"
 
 sweep_rig() {
     local rig="$1"
@@ -84,8 +88,13 @@ sweep_rig() {
     # List closed beads in this rig. Tolerate missing/empty output (e.g.,
     # rig has no closed beads yet). The `gc bd --rig` invocation is the
     # canonical way to read rig-scoped bead stores from outside a rig.
+    # --limit 100000: `gc bd list` defaults to 50 rows, and the supervisor closes
+    # order-wisps every few minutes, so the 50 most-recent closed beads are all
+    # wisps (which the wisp filter below drops) — real story beads never appear
+    # without a high limit. This was the silent stall: the sweep saw only wisps
+    # and recorded zero story-bead cost from ~2026-06-11 onward.
     local beads_json
-    beads_json=$(gc bd --rig "$rig" list --status=closed --json 2>/dev/null || echo "[]")
+    beads_json=$(gc bd --rig "$rig" list --status=closed --limit 100000 --json 2>/dev/null || echo "[]")
     if ! echo "$beads_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
         return 0
     fi
