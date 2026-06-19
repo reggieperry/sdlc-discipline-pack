@@ -45,6 +45,12 @@ from pathlib import Path
 # Keys are the model ids that Claude Code writes into the JSONL `message.model`
 # field. Cache pricing follows Anthropic's prompt-caching docs.
 PRICING_PER_MTOK_USD = {
+    "claude-opus-4-8": {
+        "input": 15.00,
+        "output": 75.00,
+        "cache_write_5m": 18.75,
+        "cache_read": 1.50,
+    },
     "claude-opus-4-7": {
         "input": 15.00,
         "output": 75.00,
