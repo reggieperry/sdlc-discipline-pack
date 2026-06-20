@@ -240,6 +240,19 @@ Use this exact structure:
 <List paths from the rig's CLAUDE.md sensitive-files list that the plan
 would touch. If none: state "None.">
 
+## Anchors
+
+<Your code map for the worker — the exploration you did, captured so the
+worker starts from it instead of re-deriving the codebase from zero. For
+each edit site, one line: `<path>:<line> | <symbol> | one-line current
+behavior`. Then, for each symbol you will change, its definition site and
+its call sites as `<path>:<line>`, so the worker can trace impact without
+re-grepping. Finally, any verified-fact corrections to the spec (a field
+name, a count, a signature you confirmed against the code). These are a
+jump map, not a substitute for reading the code — the worker verifies each
+anchor as it reaches it. If a step creates a brand-new file with no
+existing edit site, state "New file: <path> — no existing anchors.">
+
 ## Steps
 
 Each step is one of two shapes. The build step executes them in order.
@@ -283,6 +296,12 @@ implementation is mechanical and the test is the safety net.
   criteria the story doesn't imply, even if you'd write them yourself.
 - **Sensitive files explicit.** If you would touch a sensitive file,
   name it. The worker's submit step will block silent edits.
+- **Anchors are the handoff.** The worker re-explores the codebase from
+  zero unless you hand it the map. Fill `## Anchors` with the exact edit
+  sites and the definition/call sites you found while planning — this is
+  the exploration the worker would otherwise repeat, which is the largest
+  cost in the chain. Anchor lines are a jump map, not a license to skip
+  reading: the worker still verifies each site as it edits.
 
 Record the plan path:
 

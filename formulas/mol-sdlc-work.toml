@@ -295,6 +295,15 @@ description = """
 Execute the plan's steps in order. Each step is shaped per the plan's
 marker — `red-green-refactor` or `pin-after-implementation`.
 
+Before the first step, read the plan's `## Anchors` section — the planner's
+code map: the exact edit sites (`<path>:<line> | <symbol>`), each symbol's
+definition and call sites, and any spec corrections. Use it as your jump
+map so you start from the planner's exploration instead of re-deriving the
+codebase from zero. It is a starting map, not a substitute for reading:
+open and verify each anchor at its site as you edit, and if an anchor is
+stale (the line moved, the symbol changed), trust the code and note the
+drift.
+
 For `red-green-refactor` steps:
 
 1. **Red.** Write the test named in the plan. Run `uv run pytest <path> -v`.
